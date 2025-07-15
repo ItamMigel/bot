@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: chto_by_prigotovit_bot
+    restart: unless-stopped
+    volumes:
+      - ./uploads:/app/uploads
+      - ./bot.db:/app/bot.db
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DATABASE_URL=sqlite+aiosqlite:///./bot.db
+      - ADMIN_IDS=${ADMIN_IDS}
+      - PAYMENT_CARD_NUMBER=${PAYMENT_CARD_NUMBER}
+      - PAYMENT_CARD_OWNER=${PAYMENT_CARD_OWNER}
+    depends_on:
+      - db
+    networks:
+      - bot_network
+
+  # Опциональная PostgreSQL база данных (для продакшена)
+  db:
+    image: postgres:15-alpine
+    container_name: chto_by_prigotovit_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bot_db
+      POSTGRES_USER: bot_user
+      POSTGRES_PASSWORD: bot_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bot_network
+    # Раскомментируйте для использования PostgreSQL
+    # ports:
+    #   - "5432:5432"
+
+volumes:
+  postgres_data:
+
+networks:
+  bot_network:
+    driver: bridge
