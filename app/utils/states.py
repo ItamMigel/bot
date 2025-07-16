@@ -25,6 +25,10 @@ class UserStates(StatesGroup):
     VIEWING_ORDERS = State()
     VIEWING_ORDER_DETAILS = State()
     
+    # FAQ и обратная связь
+    VIEWING_FAQ = State()
+    WRITING_FEEDBACK = State()
+    
     # Профиль
     EDITING_PROFILE = State()
     ENTERING_PHONE = State()

@@ -13,7 +13,7 @@ from app.keyboards.user import (
     get_order_confirmation_keyboard, get_orders_keyboard,
     get_order_details_keyboard
 )
-from app.database import async_session_maker, User
+from app.database import async_session_maker, User, Order
 from app.services.cart import CartService
 
 router = Router()
@@ -152,7 +152,7 @@ async def choose_cash_payment(callback: CallbackQuery, state: FSMContext, user: 
     await state.set_state(UserStates.MAIN_MENU)
     
     # Уведомляем администратора о новом заказе
-    await notify_admin_new_order(order)
+    await notify_admin_new_order(order, user, callback.bot)
 
 
 @router.message(
@@ -195,7 +195,7 @@ async def receive_payment_screenshot(message: Message, state: FSMContext, user: 
             )
             
             # Уведомляем администратора
-            await notify_admin_payment_received(order)
+            await notify_admin_payment_received(order, user, message.bot)
         else:
             await message.answer("❌ Ошибка сохранения скриншота")
     
@@ -260,11 +260,23 @@ async def cancel_payment_order(callback: CallbackQuery, state: FSMContext, user:
     async with async_session_maker() as session:
         from app.services.order import OrderService
         
+        # Получаем заказ для уведомления
+        from sqlalchemy import select
+        order_result = await session.execute(
+            select(Order).where(Order.id == order_id, Order.user_id == user.id)
+        )
+        order = order_result.scalar_one_or_none()
+        
         # Отменяем заказ
         success = await OrderService.cancel_order(session, order_id, user.id)
         await session.commit()
         
         if success:
+            # Уведомляем администраторов об отмене
+            if order:
+                from app.services.notifications import NotificationService
+                await NotificationService.notify_order_cancelled(callback.bot, order, user)
+                
             await callback.message.edit_text(
                 texts.ORDER_CANCELLED.format(order_id=order_id)
             )
@@ -379,16 +391,43 @@ async def repeat_order(callback: CallbackQuery, state: FSMContext, user: User):
             await callback.answer("❌ Ошибка при повторении заказа", show_alert=True)
 
 
-async def notify_admin_new_order(order):
+async def notify_admin_new_order(order, user_obj=None, bot=None):
     """Уведомить администратора о новом заказе"""
-    # TODO: Реализовать отправку уведомления администратору
-    logging.info(f"Новый заказ #{order.id} от пользователя {order.user_id}")
+    try:
+        if not user_obj:
+            # Получаем объект пользователя из базы
+            async with async_session_maker() as session:
+                from sqlalchemy import select
+                result = await session.execute(select(User).where(User.id == order.user_id))
+                user_obj = result.scalar_one_or_none()
+        
+        if user_obj and bot:
+            from app.services.notifications import NotificationService
+            logging.info(f"Новый заказ #{order.id} от пользователя {user_obj.telegram_id}")
+            await NotificationService.notify_new_order(bot, order, user_obj)
+        
+    except Exception as e:
+        logging.error(f"Ошибка уведомления о новом заказе: {e}")
 
 
-async def notify_admin_payment_received(order):
+async def notify_admin_payment_received(order, user_obj=None, bot=None):
     """Уведомить администратора о получении оплаты"""
-    # TODO: Реализовать отправку уведомления администратору
-    logging.info(f"Получен платеж по заказу #{order.id}")
+    try:
+        if not user_obj:
+            # Получаем объект пользователя из базы
+            async with async_session_maker() as session:
+                from sqlalchemy import select
+                result = await session.execute(select(User).where(User.id == order.user_id))
+                user_obj = result.scalar_one_or_none()
+        
+        if user_obj and bot:
+            from app.services.notifications import NotificationService
+            logging.info(f"Получен платеж по заказу #{order.id}")
+            await NotificationService.notify_payment_received(bot, order, user_obj)
+            await NotificationService.notify_payment_received(bot, order, user_obj)
+        
+    except Exception as e:
+        logging.error(f"Ошибка уведомления о платеже: {e}")
 
 
 @router.callback_query(F.data == "back_to_orders")

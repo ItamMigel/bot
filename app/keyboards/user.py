@@ -23,6 +23,9 @@ def get_main_menu_keyboard(cart_count: int = 0) -> ReplyKeyboardMarkup:
     )
     builder.row(
         KeyboardButton(text=texts.BUTTON_ORDERS),
+        KeyboardButton(text=texts.BUTTON_FAQ)
+    )
+    builder.row(
         KeyboardButton(text=texts.BUTTON_HELP)
     )
     
