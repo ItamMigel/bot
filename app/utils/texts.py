@@ -80,6 +80,7 @@ ORDER_STATUSES = {
     "cart": "🛒 Корзина",
     "pending_payment": "⏳ Ожидает оплаты", 
     "payment_confirmation": "🔍 Проверка оплаты",
+    "pending_confirmation": "⏳ Ожидает подтверждения",
     "confirmed": "✅ Подтвержден",
     "ready": "🎉 Готов к выдаче",
     "completed": "✅ Завершен",
@@ -216,6 +217,7 @@ NEW_ORDER_NOTIFICATION = """
 👤 Клиент: {user_name} (ID: {user_id})
 💰 Сумма: {total_amount} ₽
 💳 Оплата: {payment_method}
+📅 Дата: {created_at}
 
 🛍 Состав заказа:
 {order_items}
@@ -353,16 +355,6 @@ ADMIN_MAIN_MESSAGE = """
 👨‍💼 Панель администратора
 
 Выберите действие:
-"""
-
-NEW_ORDER_NOTIFICATION = """
-🔔 Новый заказ #{order_id}
-
-👤 Пользователь: {user_name}
-💰 Сумма: {total_amount} ₽
-📅 Дата: {created_at}
-
-{order_items}
 """
 
 PAYMENT_RECEIVED_NOTIFICATION = """

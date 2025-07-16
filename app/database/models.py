@@ -13,6 +13,7 @@ class OrderStatus(Enum):
     CART = "cart"  # Корзина (черновик)
     PENDING_PAYMENT = "pending_payment"  # Ожидает оплаты
     PAYMENT_CONFIRMATION = "payment_confirmation"  # Подтверждение оплаты админом
+    PENDING_CONFIRMATION = "pending_confirmation"  # Ожидает подтверждения админом (наличные)
     CONFIRMED = "confirmed"  # Подтвержден, готовится
     READY = "ready"  # Готов к выдаче
     COMPLETED = "completed"  # Завершен

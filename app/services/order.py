@@ -28,7 +28,7 @@ class OrderService:
             order = Order(
                 user_id=user_id,
                 total_amount=cart.total_amount,
-                status="pending_payment" if payment_method == "card" else "confirmed",
+                status="pending_payment" if payment_method == "card" else "pending_confirmation",
                 payment_method=payment_method,
                 created_at=datetime.utcnow()
             )
@@ -222,7 +222,7 @@ class OrderService:
                 return False
             
             # Проверяем, можно ли отменить заказ
-            if order.status not in ["pending_payment", "payment_confirmation"]:
+            if order.status not in ["pending_payment", "payment_confirmation", "pending_confirmation"]:
                 return False
             
             # Отменяем заказ

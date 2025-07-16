@@ -65,10 +65,18 @@ class NotificationService:
         from app.utils import texts
         from app.utils.helpers import format_price
         
+        logging.info(f"NotificationService.notify_new_order вызван для заказа #{order.id}")
+        
         # Формируем список товаров
         items_text = []
-        for item in order.items:
-            items_text.append(f"• {item.dish.name} x{item.quantity}")
+        try:
+            for item in order.items:
+                items_text.append(f"• {item.dish.name} x{item.quantity}")
+            
+            logging.info(f"Сформирован список товаров: {len(items_text)} позиций")
+        except Exception as e:
+            logging.error(f"Ошибка при формировании списка товаров: {e}")
+            items_text = ["• Ошибка загрузки товаров"]
         
         message = texts.NEW_ORDER_NOTIFICATION.format(
             order_id=order.id,
@@ -76,10 +84,14 @@ class NotificationService:
             user_id=user.telegram_id,
             total_amount=format_price(order.total_amount),
             payment_method="💳 Карта" if order.payment_method == "card" else "💵 Наличные",
-            order_items="\n".join(items_text)
+            order_items="\n".join(items_text),
+            created_at=order.created_at.strftime('%d.%m.%Y %H:%M')
         )
         
-        return await NotificationService.notify_admins(bot, message)
+        logging.info(f"Сформировано уведомление для админов о заказе #{order.id}")
+        result = await NotificationService.notify_admins(bot, message)
+        logging.info(f"Результат отправки уведомления: {result}")
+        return result
     
     @staticmethod
     async def notify_payment_received(bot: Bot, order, user):

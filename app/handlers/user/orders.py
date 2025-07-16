@@ -13,7 +13,7 @@ from app.keyboards.user import (
     get_order_confirmation_keyboard, get_orders_keyboard,
     get_order_details_keyboard
 )
-from app.database import async_session_maker, User, Order
+from app.database import async_session_maker, User, Order, OrderItem
 from app.services.cart import CartService
 
 router = Router()
@@ -152,6 +152,7 @@ async def choose_cash_payment(callback: CallbackQuery, state: FSMContext, user: 
     await state.set_state(UserStates.MAIN_MENU)
     
     # Уведомляем администратора о новом заказе
+    logging.info(f"Отправляем уведомление о заказе #{order.id} (наличные)")
     await notify_admin_new_order(order, user, callback.bot)
 
 
@@ -394,17 +395,34 @@ async def repeat_order(callback: CallbackQuery, state: FSMContext, user: User):
 async def notify_admin_new_order(order, user_obj=None, bot=None):
     """Уведомить администратора о новом заказе"""
     try:
-        if not user_obj:
-            # Получаем объект пользователя из базы
-            async with async_session_maker() as session:
-                from sqlalchemy import select
-                result = await session.execute(select(User).where(User.id == order.user_id))
-                user_obj = result.scalar_one_or_none()
-        
-        if user_obj and bot:
-            from app.services.notifications import NotificationService
-            logging.info(f"Новый заказ #{order.id} от пользователя {user_obj.telegram_id}")
-            await NotificationService.notify_new_order(bot, order, user_obj)
+        # Создаем новую сессию для получения полных данных заказа
+        async with async_session_maker() as session:
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            
+            # Получаем заказ с загруженными items и dish
+            order_result = await session.execute(
+                select(Order)
+                .options(selectinload(Order.items).selectinload(OrderItem.dish))
+                .where(Order.id == order.id)
+            )
+            full_order = order_result.scalar_one_or_none()
+            
+            if not full_order:
+                logging.error(f"Заказ #{order.id} не найден в базе")
+                return
+            
+            # Получаем пользователя если не передан
+            if not user_obj:
+                user_result = await session.execute(
+                    select(User).where(User.id == full_order.user_id)
+                )
+                user_obj = user_result.scalar_one_or_none()
+            
+            if user_obj and bot:
+                from app.services.notifications import NotificationService
+                logging.info(f"Новый заказ #{full_order.id} от пользователя {user_obj.telegram_id}")
+                await NotificationService.notify_new_order(bot, full_order, user_obj)
         
     except Exception as e:
         logging.error(f"Ошибка уведомления о новом заказе: {e}")
@@ -413,18 +431,34 @@ async def notify_admin_new_order(order, user_obj=None, bot=None):
 async def notify_admin_payment_received(order, user_obj=None, bot=None):
     """Уведомить администратора о получении оплаты"""
     try:
-        if not user_obj:
-            # Получаем объект пользователя из базы
-            async with async_session_maker() as session:
-                from sqlalchemy import select
-                result = await session.execute(select(User).where(User.id == order.user_id))
-                user_obj = result.scalar_one_or_none()
-        
-        if user_obj and bot:
-            from app.services.notifications import NotificationService
-            logging.info(f"Получен платеж по заказу #{order.id}")
-            await NotificationService.notify_payment_received(bot, order, user_obj)
-            await NotificationService.notify_payment_received(bot, order, user_obj)
+        # Создаем новую сессию для получения полных данных
+        async with async_session_maker() as session:
+            from sqlalchemy import select
+            from sqlalchemy.orm import selectinload
+            
+            # Получаем заказ с загруженными items
+            order_result = await session.execute(
+                select(Order)
+                .options(selectinload(Order.items).selectinload(OrderItem.dish))
+                .where(Order.id == order.id)
+            )
+            full_order = order_result.scalar_one_or_none()
+            
+            if not full_order:
+                logging.error(f"Заказ #{order.id} не найден в базе")
+                return
+                
+            # Получаем пользователя если не передан
+            if not user_obj:
+                user_result = await session.execute(
+                    select(User).where(User.id == full_order.user_id)
+                )
+                user_obj = user_result.scalar_one_or_none()
+            
+            if user_obj and bot:
+                from app.services.notifications import NotificationService
+                logging.info(f"Получен платеж по заказу #{full_order.id}")
+                await NotificationService.notify_payment_received(bot, full_order, user_obj)
         
     except Exception as e:
         logging.error(f"Ошибка уведомления о платеже: {e}")

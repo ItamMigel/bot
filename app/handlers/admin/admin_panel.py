@@ -1,11 +1,13 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, update, and_
 
 from app.database import async_session_maker, Order, OrderItem, Dish, User, OrderStatus, PaymentStatus
 from app.middlewares.admin import AdminMiddleware
 from app.utils.texts import ADMIN_HELP, ORDER_STATUSES
+from app.utils.states import AdminStates
 from app.keyboards.user import get_main_menu_keyboard
 from app.services.order import OrderService
 
@@ -45,10 +47,13 @@ async def admin_panel(message: Message):
 async def show_pending_orders(callback: CallbackQuery):
     """Показать заказы на модерации"""
     async with async_session_maker() as session:
-        # Заказы ожидающие подтверждения оплаты
+        # Заказы ожидающие подтверждения оплаты или подтверждения админом
         result = await session.execute(
             select(Order)
-            .where(Order.status == OrderStatus.PAYMENT_CONFIRMATION.value)
+            .where(Order.status.in_([
+                OrderStatus.PAYMENT_CONFIRMATION.value,
+                OrderStatus.PENDING_CONFIRMATION.value
+            ]))
             .order_by(Order.created_at.desc())
         )
         orders = result.scalars().all()
@@ -56,7 +61,7 @@ async def show_pending_orders(callback: CallbackQuery):
         if not orders:
             await callback.message.edit_text(
                 "✅ Нет заказов ожидающих модерации",
-                reply_markup={"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "admin_panel"}]]}
+                reply_markup={"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "back_to_admin_panel"}]]}
             )
             return
         
@@ -83,7 +88,7 @@ async def show_pending_orders(callback: CallbackQuery):
                 {"text": f"📋 Заказ #{order.id}", "callback_data": f"admin_order_{order.id}"}
             ])
         
-        keyboard.append([{"text": "🔙 Назад", "callback_data": "admin_panel"}])
+        keyboard.append([{"text": "🔙 Назад", "callback_data": "back_to_admin_panel"}])
         
         await callback.message.edit_text(
             text,
@@ -150,6 +155,11 @@ async def show_order_details(callback: CallbackQuery):
                 [{"text": "✅ Подтвердить оплату", "callback_data": f"confirm_payment_{order_id}"}],
                 [{"text": "❌ Отклонить оплату", "callback_data": f"reject_payment_{order_id}"}]
             ])
+        elif order.status == OrderStatus.PENDING_CONFIRMATION.value:
+            keyboard.extend([
+                [{"text": "✅ Подтвердить заказ", "callback_data": f"confirm_order_{order_id}"}],
+                [{"text": "❌ Отклонить заказ", "callback_data": f"reject_order_{order_id}"}]
+            ])
         elif order.status == OrderStatus.CONFIRMED.value:
             keyboard.append([{"text": "🍽 Заказ готов", "callback_data": f"set_status_{order_id}_ready"}])
         elif order.status == OrderStatus.READY.value:
@@ -170,8 +180,7 @@ async def show_order_details(callback: CallbackQuery):
             parse_mode="HTML"
         )
     
-    await callback.answer("🍽 Заказ отмечен как готовый!")
-    await show_order_details(callback)  # Обновляем отображение заказа
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_complete_"))
@@ -251,7 +260,7 @@ async def show_all_orders(callback: CallbackQuery):
         if not orders:
             await callback.message.edit_text(
                 "📋 Заказов пока нет",
-                reply_markup={"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "admin_panel"}]]}
+                reply_markup={"inline_keyboard": [[{"text": "🔙 Назад", "callback_data": "back_to_admin_panel"}]]}
             )
             return
         
@@ -284,7 +293,7 @@ async def show_all_orders(callback: CallbackQuery):
                 {"text": f"📋 Заказ #{order.id}", "callback_data": f"admin_order_{order.id}"}
             ])
         
-        keyboard.append([{"text": "🔙 Назад", "callback_data": "admin_panel"}])
+        keyboard.append([{"text": "🔙 Назад", "callback_data": "back_to_admin_panel"}])
         
         await callback.message.edit_text(
             text,
@@ -378,7 +387,7 @@ async def show_stats(callback: CallbackQuery):
         )
         
         keyboard = [
-            [{"text": "🔙 Назад", "callback_data": "admin_panel"}]
+            [{"text": "🔙 Назад", "callback_data": "back_to_admin_panel"}]
         ]
         
         await callback.message.edit_text(
@@ -423,7 +432,7 @@ async def show_categories_list(callback: CallbackQuery):
         from app.database import Category
         
         result = await session.execute(
-            select(Category).order_by(Category.order_index, Category.name)
+            select(Category).order_by(Category.sort_order, Category.name)
         )
         categories = result.scalars().all()
         
@@ -444,7 +453,7 @@ async def show_categories_list(callback: CallbackQuery):
         keyboard = []
         for category in categories:
             keyboard.append([{
-                "text": f"📂 {category.name} ({'✅' if category.is_available else '❌'})",
+                "text": f"📂 {category.name} ({'✅' if category.is_active else '❌'})",
                 "callback_data": f"edit_category_{category.id}"
             }])
         
@@ -457,7 +466,7 @@ async def show_categories_list(callback: CallbackQuery):
         
         categories_text = "📂 <b>Категории</b>\n\n"
         for category in categories:
-            status = "✅ Доступна" if category.is_available else "❌ Скрыта"
+            status = "✅ Доступна" if category.is_active else "❌ Скрыта"
             categories_text += f"• {category.name} - {status}\n"
         
         await callback.message.edit_text(
@@ -475,7 +484,7 @@ async def show_dishes_list(callback: CallbackQuery):
         from app.database import Category
         
         result = await session.execute(
-            select(Category).order_by(Category.order_index, Category.name)
+            select(Category).order_by(Category.sort_order, Category.name)
         )
         categories = result.scalars().all()
         
@@ -545,7 +554,7 @@ async def show_dishes_in_category(callback: CallbackQuery):
                 f"🍽 <b>Блюда в категории \"{category.name}\"</b>\n\n"
                 "❌ Блюда не найдены",
                 reply_markup={"inline_keyboard": [[
-                    {"text": "➕ Добавить блюдо", "callback_data": f"add_dish_to_category_{category_id}"},
+                    {"text": "➕ Добавить блюдо", "callback_data": f"add_dish_{category_id}"},
                     {"text": "🔙 Назад", "callback_data": "admin_dishes"}
                 ]]},
                 parse_mode="HTML"
@@ -562,7 +571,7 @@ async def show_dishes_in_category(callback: CallbackQuery):
             }])
         
         keyboard.append([
-            {"text": "➕ Добавить блюдо", "callback_data": f"add_dish_to_category_{category_id}"}
+            {"text": "➕ Добавить блюдо", "callback_data": f"add_dish_{category_id}"}
         ])
         keyboard.append([
             {"text": "🔙 Назад", "callback_data": "admin_dishes"}
@@ -600,7 +609,7 @@ async def edit_category(callback: CallbackQuery):
         
         keyboard = [
             [
-                {"text": "✅ Показать" if not category.is_available else "❌ Скрыть", 
+                {"text": "✅ Показать" if not category.is_active else "❌ Скрыть", 
                  "callback_data": f"toggle_category_{category_id}"}
             ],
             [
@@ -612,12 +621,12 @@ async def edit_category(callback: CallbackQuery):
             ]
         ]
         
-        status = "✅ Доступна" if category.is_available else "❌ Скрыта"
+        status = "✅ Доступна" if category.is_active else "❌ Скрыта"
         
         await callback.message.edit_text(
             f"📂 <b>Категория: {category.name}</b>\n\n"
             f"📊 Статус: {status}\n"
-            f"🔢 Порядок: {category.order_index}\n\n"
+            f"🔢 Порядок: {category.sort_order}\n\n"
             "Выберите действие:",
             reply_markup={"inline_keyboard": keyboard},
             parse_mode="HTML"
@@ -625,7 +634,7 @@ async def edit_category(callback: CallbackQuery):
         await callback.answer()
 
 
-@router.callback_query(F.data.startswith("edit_dish_"))
+@router.callback_query(F.data.regexp(r"^edit_dish_\d+$"))
 async def edit_dish(callback: CallbackQuery):
     """Редактировать блюдо"""
     dish_id = int(callback.data.split("_")[2])
@@ -646,8 +655,8 @@ async def edit_dish(callback: CallbackQuery):
                  "callback_data": f"toggle_dish_{dish_id}"}
             ],
             [
-                {"text": "📝 Изменить цену", "callback_data": f"change_price_{dish_id}"},
-                {"text": "📄 Изменить описание", "callback_data": f"change_description_{dish_id}"}
+                {"text": "� Изменить цену", "callback_data": f"edit_dish_price_{dish_id}"},
+                {"text": "📄 Изменить описание", "callback_data": f"edit_dish_description_{dish_id}"}
             ],
             [
                 {"text": "🗑 Удалить", "callback_data": f"delete_dish_{dish_id}"}
@@ -689,10 +698,10 @@ async def toggle_category_availability(callback: CallbackQuery):
             return
         
         # Переключаем доступность
-        category.is_available = not category.is_available
+        category.is_active = not category.is_active
         await session.commit()
         
-        status = "показана" if category.is_available else "скрыта"
+        status = "показана" if category.is_active else "скрыта"
         await callback.answer(f"✅ Категория {status}!", show_alert=True)
         
         # Обновляем отображение
@@ -906,3 +915,610 @@ async def set_order_status(callback: CallbackQuery):
     
     # Возвращаемся к списку заказов
     await show_all_orders(callback)
+
+
+@router.callback_query(F.data.startswith("confirm_order_"))
+async def confirm_cash_order(callback: CallbackQuery):
+    """Подтвердить заказ с оплатой наличными"""
+    order_id = int(callback.data.split("_")[2])
+    
+    async with async_session_maker() as session:
+        # Обновляем статус заказа
+        result = await session.execute(
+            update(Order)
+            .where(Order.id == order_id)
+            .values(status="confirmed")
+        )
+        
+        if result.rowcount > 0:
+            await session.commit()
+            
+            # Получаем заказ для уведомления пользователя
+            order_result = await session.execute(
+                select(Order, User)
+                .join(User)
+                .where(Order.id == order_id)
+            )
+            order, user = order_result.first()
+            
+            # Уведомляем пользователя об изменении статуса
+            from app.services.notifications import NotificationService
+            await NotificationService.notify_order_status_change(
+                callback.bot, order, user, "pending_confirmation", "confirmed"
+            )
+            
+            await callback.answer("✅ Заказ подтвержден!", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка подтверждения", show_alert=True)
+    
+    # Обновляем список заказов
+    await show_pending_orders(callback)
+
+
+@router.callback_query(F.data.startswith("reject_order_"))
+async def reject_cash_order(callback: CallbackQuery):
+    """Отклонить заказ с оплатой наличными"""
+    order_id = int(callback.data.split("_")[2])
+    
+    async with async_session_maker() as session:
+        # Обновляем статус заказа
+        result = await session.execute(
+            update(Order)
+            .where(Order.id == order_id)
+            .values(status="cancelled")
+        )
+        
+        if result.rowcount > 0:
+            await session.commit()
+            
+            # Получаем заказ для уведомления пользователя
+            order_result = await session.execute(
+                select(Order, User)
+                .join(User)
+                .where(Order.id == order_id)
+            )
+            order, user = order_result.first()
+            
+            # Уведомляем пользователя об отклонении
+            from app.services.notifications import NotificationService
+            await NotificationService.notify_order_status_change(
+                callback.bot, order, user, "pending_confirmation", "cancelled"
+            )
+            
+            await callback.answer("❌ Заказ отклонен", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка отклонения", show_alert=True)
+    
+    # Обновляем список заказов
+    await show_pending_orders(callback)
+
+
+# === УПРАВЛЕНИЕ КАТЕГОРИЯМИ ===
+
+@router.callback_query(F.data == "add_category")
+async def add_category_start(callback: CallbackQuery, state: FSMContext):
+    """Начать добавление новой категории"""
+    await callback.message.edit_text(
+        "📂 <b>Добавление новой категории</b>\n\n"
+        "Введите название категории:",
+        parse_mode="HTML"
+    )
+    await state.set_state(AdminStates.ENTERING_CATEGORY_NAME)
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminStates.ENTERING_CATEGORY_NAME))
+async def handle_category_name_input(message: Message, state: FSMContext):
+    """Обработать ввод названия категории (создание или переименование)"""
+    category_name = message.text.strip()
+    
+    if len(category_name) < 2 or len(category_name) > 100:
+        await message.answer(
+            "❌ Название категории должно быть от 2 до 100 символов.\n"
+            "Попробуйте еще раз:"
+        )
+        return
+    
+    data = await state.get_data()
+    category_id = data.get("category_id")
+    
+    async with async_session_maker() as session:
+        from app.database import Category
+        
+        if category_id:
+            # Переименование существующей категории
+            category = await session.get(Category, category_id)
+            if not category:
+                await message.answer("❌ Категория не найдена")
+                await state.clear()
+                return
+            
+            # Проверяем, что категория с таким именем не существует
+            existing = await session.execute(
+                select(Category).where(Category.name == category_name, Category.id != category_id)
+            )
+            if existing.scalar_one_or_none():
+                await message.answer(
+                    "❌ Категория с таким названием уже существует.\n"
+                    "Введите другое название:"
+                )
+                return
+            
+            old_name = category.name
+            category.name = category_name
+            await session.commit()
+            
+            await message.answer(
+                f"✅ Категория '{old_name}' переименована в '{category_name}'!",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "📂 К списку категорий", "callback_data": "admin_categories"}
+                ]]}
+            )
+        else:
+            # Создание новой категории
+            # Проверяем, что категория с таким именем не существует
+            existing = await session.execute(
+                select(Category).where(Category.name == category_name)
+            )
+            if existing.scalar_one_or_none():
+                await message.answer(
+                    "❌ Категория с таким названием уже существует.\n"
+                    "Введите другое название:"
+                )
+                return
+            
+            # Создаем новую категорию
+            new_category = Category(
+                name=category_name,
+                is_active=True,
+                sort_order=0
+            )
+            session.add(new_category)
+            await session.commit()
+            
+            await message.answer(
+                f"✅ Категория '{category_name}' успешно добавлена!",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "📂 К списку категорий", "callback_data": "admin_categories"}
+                ]]}
+            )
+    
+    await state.clear()
+
+
+@router.callback_query(F.data.startswith("rename_category_"))
+async def rename_category_start(callback: CallbackQuery, state: FSMContext):
+    """Начать переименование категории"""
+    category_id = int(callback.data.split("_")[2])
+    
+    async with async_session_maker() as session:
+        from app.database import Category
+        category = await session.get(Category, category_id)
+        
+        if not category:
+            await callback.answer("❌ Категория не найдена", show_alert=True)
+            return
+        
+        await callback.message.edit_text(
+            f"📂 <b>Переименование категории</b>\n\n"
+            f"Текущее название: <b>{category.name}</b>\n\n"
+            f"Введите новое название:",
+            parse_mode="HTML"
+        )
+        
+        await state.set_state(AdminStates.ENTERING_CATEGORY_NAME)
+        await state.update_data(category_id=category_id)
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_category_"))
+async def delete_category_confirm(callback: CallbackQuery):
+    """Подтвердить удаление категории"""
+    category_id = int(callback.data.split("_")[2])
+    
+    async with async_session_maker() as session:
+        from app.database import Category, Dish
+        
+        category = await session.get(Category, category_id)
+        if not category:
+            await callback.answer("❌ Категория не найдена", show_alert=True)
+            return
+        
+        # Проверяем, есть ли блюда в категории
+        dishes_result = await session.execute(
+            select(Dish).where(Dish.category_id == category_id)
+        )
+        dishes_count = len(dishes_result.scalars().all())
+        
+        warning_text = ""
+        if dishes_count > 0:
+            warning_text = f"\n\n⚠️ В категории {dishes_count} блюд. Они также будут удалены!"
+        
+        await callback.message.edit_text(
+            f"🗑 <b>Удаление категории</b>\n\n"
+            f"Вы действительно хотите удалить категорию <b>'{category.name}'</b>?{warning_text}",
+            reply_markup={"inline_keyboard": [
+                [
+                    {"text": "✅ Да, удалить", "callback_data": f"confirm_delete_category_{category_id}"},
+                    {"text": "❌ Отмена", "callback_data": "admin_categories"}
+                ]
+            ]},
+            parse_mode="HTML"
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_delete_category_"))
+async def delete_category_execute(callback: CallbackQuery):
+    """Выполнить удаление категории"""
+    category_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.database import Category, Dish
+        
+        category = await session.get(Category, category_id)
+        if not category:
+            await callback.answer("❌ Категория не найдена", show_alert=True)
+            return
+        
+        category_name = category.name
+        
+        # Сначала удаляем все блюда этой категории
+        dishes_result = await session.execute(
+            select(Dish).where(Dish.category_id == category_id)
+        )
+        dishes = dishes_result.scalars().all()
+        
+        # Удаляем каждое блюдо
+        for dish in dishes:
+            await session.delete(dish)
+        
+        # Теперь удаляем саму категорию
+        await session.delete(category)
+        await session.commit()
+        
+        dishes_count = len(dishes)
+        dishes_text = f" и {dishes_count} блюд" if dishes_count > 0 else ""
+        
+        await callback.message.edit_text(
+            f"✅ Категория '{category_name}'{dishes_text} успешно удалены!",
+            reply_markup={"inline_keyboard": [[
+                {"text": "📂 К списку категорий", "callback_data": "admin_categories"}
+            ]]}
+        )
+        await callback.answer()
+
+
+# === УПРАВЛЕНИЕ БЛЮДАМИ ===
+
+@router.callback_query(F.data == "add_dish")
+async def choose_category_for_dish(callback: CallbackQuery):
+    """Выбрать категорию для нового блюда"""
+    async with async_session_maker() as session:
+        from app.database import Category
+        
+        categories_result = await session.execute(
+            select(Category).where(Category.is_active == True).order_by(Category.sort_order, Category.name)
+        )
+        categories = categories_result.scalars().all()
+        
+        if not categories:
+            await callback.answer("❌ Нет активных категорий", show_alert=True)
+            return
+        
+        keyboard = []
+        for category in categories:
+            keyboard.append([{
+                "text": f"📂 {category.name}",
+                "callback_data": f"add_dish_{category.id}"
+            }])
+        
+        keyboard.append([
+            {"text": "🔙 Назад", "callback_data": "admin_menu"}
+        ])
+        
+        await callback.message.edit_text(
+            "🍽 <b>Добавление блюда</b>\n\n"
+            "Выберите категорию для нового блюда:",
+            reply_markup={"inline_keyboard": keyboard},
+            parse_mode="HTML"
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("add_dish_"))
+async def add_dish_start(callback: CallbackQuery, state: FSMContext):
+    """Начать добавление нового блюда"""
+    category_id = int(callback.data.split("_")[2])
+    
+    async with async_session_maker() as session:
+        from app.database import Category
+        category = await session.get(Category, category_id)
+        
+        if not category:
+            await callback.answer("❌ Категория не найдена", show_alert=True)
+            return
+        
+        await callback.message.edit_text(
+            f"🍽 <b>Добавление нового блюда</b>\n\n"
+            f"Категория: <b>{category.name}</b>\n\n"
+            f"Введите название блюда:",
+            parse_mode="HTML"
+        )
+        
+        await state.set_state(AdminStates.ENTERING_DISH_NAME)
+        await state.update_data(category_id=category_id)
+        await callback.answer()
+
+
+@router.message(StateFilter(AdminStates.ENTERING_DISH_NAME))
+async def add_dish_name(message: Message, state: FSMContext):
+    """Получить название нового блюда"""
+    dish_name = message.text.strip()
+    
+    if len(dish_name) < 2 or len(dish_name) > 150:
+        await message.answer(
+            "❌ Название блюда должно быть от 2 до 150 символов.\n"
+            "Попробуйте еще раз:"
+        )
+        return
+    
+    await state.update_data(dish_name=dish_name)
+    await state.set_state(AdminStates.ENTERING_DISH_PRICE)
+    await message.answer(
+        f"💰 Введите цену блюда '{dish_name}' (только число, например: 350):"
+    )
+
+
+@router.message(StateFilter(AdminStates.ENTERING_DISH_PRICE))
+async def handle_dish_price_input(message: Message, state: FSMContext):
+    """Обработать ввод цены блюда (создание или редактирование)"""
+    try:
+        new_price = float(message.text.strip())
+        if new_price <= 0 or new_price > 100000:
+            await message.answer(
+                "❌ Цена должна быть положительным числом до 100000.\n"
+                "Введите цену еще раз:"
+            )
+            return
+    except ValueError:
+        await message.answer(
+            "❌ Неверный формат цены. Введите число (например: 350):"
+        )
+        return
+    
+    data = await state.get_data()
+    dish_id = data.get("dish_id")
+    
+    if dish_id:
+        # Редактирование существующего блюда
+        async with async_session_maker() as session:
+            from app.database import Dish
+            
+            dish = await session.get(Dish, dish_id)
+            if not dish:
+                await message.answer("❌ Блюдо не найдено")
+                await state.clear()
+                return
+            
+            old_price = dish.price
+            dish.price = new_price
+            await session.commit()
+            
+            await message.answer(
+                f"✅ Цена блюда '{dish.name}' изменена с {old_price} ₽ на {new_price} ₽!",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "🍽 К редактированию блюда", "callback_data": f"edit_dish_{dish_id}"}
+                ]]}
+            )
+        await state.clear()
+    else:
+        # Создание нового блюда
+        await state.update_data(dish_price=new_price)
+        await state.set_state(AdminStates.ENTERING_DISH_DESCRIPTION)
+        await message.answer(
+            "📝 Введите описание блюда (или отправьте '-' чтобы пропустить):"
+        )
+
+
+@router.message(StateFilter(AdminStates.ENTERING_DISH_DESCRIPTION))
+async def handle_dish_description_input(message: Message, state: FSMContext):
+    """Обработать ввод описания блюда (создание или редактирование)"""
+    new_description = message.text.strip()
+    if new_description == "-":
+        new_description = None
+    elif len(new_description) > 500:
+        await message.answer(
+            "❌ Описание слишком длинное (максимум 500 символов).\n"
+            "Введите описание еще раз:"
+        )
+        return
+    
+    data = await state.get_data()
+    dish_id = data.get("dish_id")
+    
+    if dish_id:
+        # Редактирование существующего блюда
+        async with async_session_maker() as session:
+            from app.database import Dish
+            
+            dish = await session.get(Dish, dish_id)
+            if not dish:
+                await message.answer("❌ Блюдо не найдено")
+                await state.clear()
+                return
+            
+            dish.description = new_description
+            await session.commit()
+            
+            desc_text = new_description or "удалено"
+            await message.answer(
+                f"✅ Описание блюда '{dish.name}' изменено!\n"
+                f"📝 Новое описание: {desc_text}",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "🍽 К редактированию блюда", "callback_data": f"edit_dish_{dish_id}"}
+                ]]}
+            )
+        await state.clear()
+    else:
+        # Создание нового блюда
+        category_id = data.get("category_id")
+        dish_name = data.get("dish_name")
+        dish_price = data.get("dish_price")
+        
+        async with async_session_maker() as session:
+            from app.database import Dish
+            
+            # Проверяем, что блюдо с таким именем не существует в этой категории
+            existing = await session.execute(
+                select(Dish).where(Dish.name == dish_name, Dish.category_id == category_id)
+            )
+            if existing.scalar_one_or_none():
+                await message.answer(
+                    "❌ Блюдо с таким названием уже существует в этой категории.\n"
+                    "Введите другое название:"
+                )
+                await state.set_state(AdminStates.ENTERING_DISH_NAME)
+                return
+            
+            # Создаем новое блюдо
+            new_dish = Dish(
+                name=dish_name,
+                description=new_description,
+                price=dish_price,
+                category_id=category_id,
+                is_available=True,
+                sort_order=0
+            )
+            session.add(new_dish)
+            await session.commit()
+            
+            await message.answer(
+                f"✅ Блюдо '{dish_name}' успешно добавлено!\n"
+                f"💰 Цена: {dish_price} ₽\n"
+                f"📝 Описание: {new_description or 'не указано'}",
+                reply_markup={"inline_keyboard": [[
+                    {"text": f"🍽 К блюдам категории", "callback_data": f"dishes_in_category_{category_id}"}
+                ]]}
+            )
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("edit_dish_price_"))
+async def edit_dish_price_start(callback: CallbackQuery, state: FSMContext):
+    """Начать изменение цены блюда"""
+    dish_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.database import Dish
+        dish = await session.get(Dish, dish_id)
+        
+        if not dish:
+            await callback.answer("❌ Блюдо не найдено", show_alert=True)
+            return
+        
+        await callback.message.edit_text(
+            f"💰 <b>Изменение цены блюда</b>\n\n"
+            f"Блюдо: <b>{dish.name}</b>\n"
+            f"Текущая цена: <b>{dish.price} ₽</b>\n\n"
+            f"Введите новую цену:",
+            parse_mode="HTML"
+        )
+        
+        await state.set_state(AdminStates.ENTERING_DISH_PRICE)
+        await state.update_data(dish_id=dish_id)
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_dish_description_"))
+async def edit_dish_description_start(callback: CallbackQuery, state: FSMContext):
+    """Начать изменение описания блюда"""
+    dish_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.database import Dish
+        dish = await session.get(Dish, dish_id)
+        
+        if not dish:
+            await callback.answer("❌ Блюдо не найдено", show_alert=True)
+            return
+        
+        current_desc = dish.description or "не указано"
+        await callback.message.edit_text(
+            f"📝 <b>Изменение описания блюда</b>\n\n"
+            f"Блюдо: <b>{dish.name}</b>\n"
+            f"Текущее описание: <b>{current_desc}</b>\n\n"
+            f"Введите новое описание (или '-' чтобы удалить):",
+            parse_mode="HTML"
+        )
+        
+        await state.set_state(AdminStates.ENTERING_DISH_DESCRIPTION)
+        await state.update_data(dish_id=dish_id)
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_dish_"))
+async def delete_dish_confirm(callback: CallbackQuery):
+    """Подтвердить удаление блюда"""
+    dish_id = int(callback.data.split("_")[2])
+    
+    async with async_session_maker() as session:
+        from app.database import Dish
+        
+        dish = await session.get(Dish, dish_id)
+        if not dish:
+            await callback.answer("❌ Блюдо не найдено", show_alert=True)
+            return
+        
+        await callback.message.edit_text(
+            f"🗑 <b>Удаление блюда</b>\n\n"
+            f"Вы действительно хотите удалить блюдо <b>'{dish.name}'</b>?\n"
+            f"💰 Цена: {dish.price} ₽",
+            reply_markup={"inline_keyboard": [
+                [
+                    {"text": "✅ Да, удалить", "callback_data": f"confirm_delete_dish_{dish_id}"},
+                    {"text": "❌ Отмена", "callback_data": f"edit_dish_{dish_id}"}
+                ]
+            ]},
+            parse_mode="HTML"
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_delete_dish_"))
+async def delete_dish_execute(callback: CallbackQuery):
+    """Выполнить удаление блюда"""
+    dish_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.database import Dish, OrderItem
+        
+        dish = await session.get(Dish, dish_id)
+        if not dish:
+            await callback.answer("❌ Блюдо не найдено", show_alert=True)
+            return
+        
+        dish_name = dish.name
+        category_id = dish.category_id
+        
+        # Сначала удаляем все связанные order_items
+        order_items_result = await session.execute(
+            select(OrderItem).where(OrderItem.dish_id == dish_id)
+        )
+        order_items = order_items_result.scalars().all()
+        
+        # Удаляем каждый order_item
+        for order_item in order_items:
+            await session.delete(order_item)
+        
+        # Теперь удаляем само блюдо
+        await session.delete(dish)
+        await session.commit()
+        
+        await callback.message.edit_text(
+            f"✅ Блюдо '{dish_name}' успешно удалено!",
+            reply_markup={"inline_keyboard": [[
+                {"text": "🍽 К блюдам категории", "callback_data": f"dishes_in_category_{category_id}"}
+            ]]}
+        )
+        await callback.answer()
