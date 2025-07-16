@@ -144,3 +144,36 @@ async def get_file_url(file_path: str) -> Optional[str]:
     # В реальном приложении здесь может быть логика
     # для получения URL из CDN или файлового сервера
     return file_path
+
+
+async def save_payment_screenshot(photo, order_id: int, bot=None) -> str:
+    """Сохранить скриншот оплаты"""
+    try:
+        # Создаем директорию для скриншотов если её нет
+        screenshots_dir = os.path.join(settings.upload_path, "screenshots")
+        os.makedirs(screenshots_dir, exist_ok=True)
+        
+        # Генерируем уникальное имя файла
+        filename = f"payment_{order_id}_{uuid.uuid4().hex}.jpg"
+        file_path = os.path.join(screenshots_dir, filename)
+        
+        # Используем переданный bot объект
+        if bot:
+            await bot.download(photo, file_path)
+        else:
+            # Пробуем альтернативный способ
+            file_info = await photo.get_file()
+            file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+            
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(file_url) as resp:
+                    with open(file_path, 'wb') as f:
+                        f.write(await resp.read())
+        
+        # Возвращаем относительный путь
+        return f"screenshots/{filename}"
+        
+    except Exception as e:
+        print(f"Ошибка сохранения скриншота: {e}")
+        return ""

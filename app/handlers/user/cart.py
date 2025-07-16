@@ -23,7 +23,10 @@ router = Router()
 async def show_cart(event: Message | CallbackQuery, state: FSMContext, user: User):
     """Показать корзину пользователя"""
     logging.info(f"Пользователь {user.id} открывает корзину, текст: {event.text if isinstance(event, Message) else 'callback'}")
-    await state.set_state(UserStates.VIEWING_CART)
+    
+    # Проверяем, что state не None
+    if state:
+        await state.set_state(UserStates.VIEWING_CART)
     
     async with async_session_maker() as session:
         cart = await CartService.get_cart_with_items(session, user.id)
@@ -74,7 +77,7 @@ async def edit_cart_item(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("cart_increase_"))
-async def increase_cart_item(callback: CallbackQuery, user: User):
+async def increase_cart_item(callback: CallbackQuery, state: FSMContext, user: User):
     """Увеличить количество товара в корзине"""
     item_id = int(callback.data.split("_")[2])
     
@@ -98,11 +101,11 @@ async def increase_cart_item(callback: CallbackQuery, user: User):
             await callback.answer("❌ Товар не найден", show_alert=True)
     
     # Обновляем отображение корзины
-    await show_cart(callback, None, user)
+    await show_cart(callback, state, user)
 
 
 @router.callback_query(F.data.startswith("cart_decrease_"))
-async def decrease_cart_item(callback: CallbackQuery, user: User):
+async def decrease_cart_item(callback: CallbackQuery, state: FSMContext, user: User):
     """Уменьшить количество товара в корзине"""
     item_id = int(callback.data.split("_")[2])
     
@@ -128,11 +131,11 @@ async def decrease_cart_item(callback: CallbackQuery, user: User):
             await callback.answer("❌ Товар не найден", show_alert=True)
     
     # Обновляем отображение корзины
-    await show_cart(callback, None, user)
+    await show_cart(callback, state, user)
 
 
 @router.callback_query(F.data.startswith("cart_set_"))
-async def set_cart_item_quantity(callback: CallbackQuery, user: User):
+async def set_cart_item_quantity(callback: CallbackQuery, state: FSMContext, user: User):
     """Установить определенное количество товара"""
     parts = callback.data.split("_")
     item_id = int(parts[2])
@@ -149,11 +152,11 @@ async def set_cart_item_quantity(callback: CallbackQuery, user: User):
             await callback.answer("❌ Ошибка обновления", show_alert=True)
     
     # Обновляем отображение корзины
-    await show_cart(callback, None, user)
+    await show_cart(callback, state, user)
 
 
 @router.callback_query(F.data.startswith("cart_remove_"))
-async def remove_cart_item(callback: CallbackQuery, user: User):
+async def remove_cart_item(callback: CallbackQuery, state: FSMContext, user: User):
     """Удалить товар из корзины"""
     item_id = int(callback.data.split("_")[2])
     
@@ -166,7 +169,7 @@ async def remove_cart_item(callback: CallbackQuery, user: User):
             await callback.answer("❌ Товар не найден", show_alert=True)
     
     # Обновляем отображение корзины
-    await show_cart(callback, None, user)
+    await show_cart(callback, state, user)
 
 
 @router.callback_query(F.data == "clear_cart")
@@ -180,7 +183,7 @@ async def ask_clear_cart(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "confirm_clear_cart")
-async def clear_cart(callback: CallbackQuery, user: User):
+async def clear_cart(callback: CallbackQuery, state: FSMContext, user: User):
     """Очистить корзину"""
     async with async_session_maker() as session:
         success = await CartService.clear_cart(session, user.id)
@@ -191,39 +194,11 @@ async def clear_cart(callback: CallbackQuery, user: User):
             await callback.answer("❌ Корзина уже пуста")
     
     # Показываем пустую корзину
-    await show_cart(callback, None, user)
+    await show_cart(callback, state, user)
 
 
 @router.callback_query(F.data == "cancel_clear_cart")
-async def cancel_clear_cart(callback: CallbackQuery, user: User):
+async def cancel_clear_cart(callback: CallbackQuery, state: FSMContext, user: User):
     """Отменить очистку корзины"""
     await callback.answer("❌ Отменено")
-    await show_cart(callback, None, user)
-
-
-@router.callback_query(F.data == "checkout")
-async def start_checkout(callback: CallbackQuery, state: FSMContext, user: User):
-    """Начать оформление заказа"""
-    async with async_session_maker() as session:
-        cart = await CartService.get_cart_with_items(session, user.id)
-        
-        if not cart or not cart.items:
-            await callback.answer("❌ Корзина пуста", show_alert=True)
-            return
-        
-        # Проверяем минимальную сумму заказа
-        from app.config import settings
-        if cart.total_amount < settings.min_order_amount:
-            await callback.answer(
-                f"❌ Минимальная сумма заказа: {settings.min_order_amount} ₽",
-                show_alert=True
-            )
-            return
-    
-    # Переходим к оформлению заказа (будет реализовано в следующей итерации)
-    await callback.message.edit_text(
-        "🚧 Оформление заказа\n\nЭта функция будет реализована в следующей версии.",
-        reply_markup=get_main_menu_keyboard()
-    )
-    await callback.answer()
-    await state.set_state(UserStates.MAIN_MENU)
+    await show_cart(callback, state, user)

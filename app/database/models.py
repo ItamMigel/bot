@@ -100,6 +100,8 @@ class Order(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     total_amount = Column(Float, default=0.0)
     status = Column(String(50), default=OrderStatus.CART.value)
+    payment_method = Column(String(20), nullable=True)  # 'card', 'cash'
+    payment_screenshot = Column(String(500), nullable=True)
     notes = Column(Text, nullable=True)
     delivery_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=func.now())

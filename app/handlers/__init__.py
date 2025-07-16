@@ -1,7 +1,8 @@
 """Регистрация всех обработчиков"""
 from aiogram import Dispatcher
 from . import common
-from .user import menu, cart
+from .user import menu, cart, orders
+from .admin import admin_panel
 
 
 def register_all_handlers(dp: Dispatcher):
@@ -9,11 +10,10 @@ def register_all_handlers(dp: Dispatcher):
     # Пользовательские обработчики (должны быть первыми)
     dp.include_router(menu.router)
     dp.include_router(cart.router)
+    dp.include_router(orders.router)
+    
+    # Админ обработчики
+    dp.include_router(admin_panel.router)
     
     # Общие обработчики (должны быть последними)
     dp.include_router(common.router)
-    
-    # TODO: добавить остальные роутеры
-    # dp.include_router(user.orders.router)
-    # dp.include_router(admin.orders.router)
-    # dp.include_router(admin.menu.router)

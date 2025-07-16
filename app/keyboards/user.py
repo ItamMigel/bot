@@ -272,7 +272,7 @@ def get_order_details_keyboard(order_id: int, can_repeat: bool = False) -> Inlin
     builder.row(
         InlineKeyboardButton(
             text=texts.BUTTON_BACK,
-            callback_data="orders"
+            callback_data="back_to_orders"
         ),
         InlineKeyboardButton(
             text=texts.BUTTON_MAIN_MENU,
