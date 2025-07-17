@@ -20,11 +20,10 @@ async def show_faq(event: Message | CallbackQuery, state: FSMContext):
     
     # Создаем клавиатуру с вопросами
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🕐 Время работы", callback_data="faq_hours")],
         [InlineKeyboardButton(text="🚚 Доставка", callback_data="faq_delivery")],
         [InlineKeyboardButton(text="💳 Оплата", callback_data="faq_payment")],
         [InlineKeyboardButton(text="📱 Как сделать заказ", callback_data="faq_order")],
-        [InlineKeyboardButton(text="🔄 Возврат и отмена", callback_data="faq_return")],
+        [InlineKeyboardButton(text="📊 Статусы заказов", callback_data="faq_statuses")],
         [InlineKeyboardButton(text="📞 Связаться с нами", callback_data="contact_us")],
         [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")]
     ])
@@ -49,11 +48,10 @@ async def show_faq_answer(callback: CallbackQuery, state: FSMContext):
     
     # Получаем текст ответа
     faq_answers = {
-        "hours": texts.FAQ_HOURS,
         "delivery": texts.FAQ_DELIVERY,
         "payment": texts.FAQ_PAYMENT,
         "order": texts.FAQ_ORDER,
-        "return": texts.FAQ_RETURN
+        "statuses": texts.FAQ_STATUSES
     }
     
     answer_text = faq_answers.get(faq_type, texts.FAQ_NOT_FOUND)
@@ -67,7 +65,8 @@ async def show_faq_answer(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(
         answer_text,
-        reply_markup=keyboard
+        reply_markup=keyboard,
+        parse_mode="HTML"
     )
     await callback.answer()
 

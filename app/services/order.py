@@ -4,7 +4,7 @@ from typing import List, Optional
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 
-from app.database.models import Order, OrderItem
+from app.database.models import Order, OrderItem, OrderStatus
 from app.services.cart import CartService
 
 
@@ -28,7 +28,7 @@ class OrderService:
             order = Order(
                 user_id=user_id,
                 total_amount=cart.total_amount,
-                status="pending_payment" if payment_method == "card" else "pending_confirmation",
+                status=OrderStatus.PENDING_PAYMENT.value,
                 payment_method=payment_method,
                 created_at=datetime.utcnow()
             )
@@ -125,7 +125,7 @@ class OrderService:
             order = await OrderService.get_order_by_id(session, order_id)
             if order:
                 order.payment_screenshot = screenshot_path
-                order.status = "payment_confirmation"
+                order.status = OrderStatus.PAYMENT_RECEIVED.value
                 order.updated_at = datetime.utcnow()
                 return True
             return False
@@ -222,11 +222,14 @@ class OrderService:
                 return False
             
             # Проверяем, можно ли отменить заказ
-            if order.status not in ["pending_payment", "payment_confirmation", "pending_confirmation"]:
+            if order.status not in [
+                OrderStatus.PENDING_PAYMENT.value, 
+                OrderStatus.PAYMENT_RECEIVED.value
+            ]:
                 return False
             
             # Отменяем заказ
-            order.status = "cancelled"
+            order.status = OrderStatus.CANCELLED_BY_CLIENT.value
             order.updated_at = datetime.utcnow()
             
             return True

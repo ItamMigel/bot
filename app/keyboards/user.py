@@ -218,10 +218,6 @@ def get_payment_method_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text=texts.BUTTON_PAY_CARD,
             callback_data="payment_card"
-        ),
-        InlineKeyboardButton(
-            text=texts.BUTTON_PAY_CASH,
-            callback_data="payment_cash"
         )
     )
     
@@ -235,20 +231,27 @@ def get_payment_method_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_orders_keyboard(orders) -> InlineKeyboardMarkup:
-    """Клавиатура со списком заказов"""
+def get_orders_filter_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура выбора фильтра заказов"""
     builder = InlineKeyboardBuilder()
     
-    for order in orders:
-        status_emoji = "🛒" if order.status == "cart" else "📋"
-        order_text = f"{status_emoji} Заказ #{order.id} - {order.total_amount:.0f}₽"
-        
-        builder.row(
-            InlineKeyboardButton(
-                text=order_text,
-                callback_data=f"order_{order.id}"
-            )
+    builder.row(
+        InlineKeyboardButton(
+            text="🔥 Активные заказы",
+            callback_data="orders_active"
+        ),
+        InlineKeyboardButton(
+            text="✅ Завершенные",
+            callback_data="orders_completed"
         )
+    )
+    
+    builder.row(
+        InlineKeyboardButton(
+            text="📋 Все заказы",
+            callback_data="orders_all"
+        )
+    )
     
     builder.row(
         InlineKeyboardButton(
@@ -260,7 +263,64 @@ def get_orders_keyboard(orders) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_order_details_keyboard(order_id: int, can_repeat: bool = False) -> InlineKeyboardMarkup:
+def get_orders_keyboard(orders, filter_type="all") -> InlineKeyboardMarkup:
+    """Клавиатура со списком заказов"""
+    builder = InlineKeyboardBuilder()
+    
+    for order in orders:
+        status_emoji = "🛒" if order.status == "cart" else "📋"
+        if order.is_active:
+            status_emoji = "🔥"
+        elif order.is_completed:
+            status_emoji = "✅"
+            
+        order_text = f"{status_emoji} Заказ #{order.id} - {order.total_amount:.0f}₽"
+        
+        builder.row(
+            InlineKeyboardButton(
+                text=order_text,
+                callback_data=f"order_{order.id}"
+            )
+        )
+    
+    # Кнопки фильтров
+    filter_buttons = []
+    if filter_type != "active":
+        filter_buttons.append(
+            InlineKeyboardButton(
+                text="🔥 Активные",
+                callback_data="orders_active"
+            )
+        )
+    if filter_type != "completed":
+        filter_buttons.append(
+            InlineKeyboardButton(
+                text="✅ Завершенные", 
+                callback_data="orders_completed"
+            )
+        )
+    if filter_type != "all":
+        filter_buttons.append(
+            InlineKeyboardButton(
+                text="📋 Все",
+                callback_data="orders_all"
+            )
+        )
+    
+    if filter_buttons:
+        builder.row(*filter_buttons)
+    
+    builder.row(
+        InlineKeyboardButton(
+            text=texts.BUTTON_MAIN_MENU,
+            callback_data="main_menu"
+        )
+    )
+    
+    return builder.as_markup()
+
+
+def get_order_details_keyboard(order_id: int, can_repeat: bool = False, can_cancel: bool = False) -> InlineKeyboardMarkup:
     """Клавиатура для деталей заказа"""
     builder = InlineKeyboardBuilder()
     
@@ -269,6 +329,14 @@ def get_order_details_keyboard(order_id: int, can_repeat: bool = False) -> Inlin
             InlineKeyboardButton(
                 text=texts.BUTTON_REPEAT_ORDER,
                 callback_data=f"repeat_order_{order_id}"
+            )
+        )
+    
+    if can_cancel:
+        builder.row(
+            InlineKeyboardButton(
+                text="❌ Отменить заказ",
+                callback_data=f"cancel_order_confirm_{order_id}"
             )
         )
     

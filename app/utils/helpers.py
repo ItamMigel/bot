@@ -8,7 +8,7 @@ from app.config import settings
 
 def format_price(price: float) -> str:
     """Форматирование цены"""
-    return f"{price:.0f}"
+    return f"{price:.0f} руб"
 
 
 def format_datetime(dt: datetime) -> str:

@@ -11,7 +11,7 @@ from app.utils.helpers import format_price
 from app.keyboards.user import (
     get_main_menu_keyboard, get_payment_method_keyboard, 
     get_order_confirmation_keyboard, get_orders_keyboard,
-    get_order_details_keyboard
+    get_order_details_keyboard, get_orders_filter_keyboard
 )
 from app.database import async_session_maker, User, Order, OrderItem
 from app.services.cart import CartService
@@ -97,63 +97,20 @@ async def choose_card_payment(callback: CallbackQuery, state: FSMContext, user: 
     from app.config import settings
     payment_text = texts.PAYMENT_CARD_INFO.format(
         amount=format_price(order.total_amount),
-        card_number=settings.payment_card_number,
+        card_sber=settings.payment_card_sber,
+        card_tinkoff=settings.payment_card_tinkoff,
         card_owner=settings.payment_card_owner,
+        phone=settings.payment_phone,
         instructions=settings.payment_instructions
     )
     
-    await callback.message.edit_text(payment_text)
+    await callback.message.edit_text(payment_text, parse_mode="HTML")
     await callback.message.answer(texts.PAYMENT_SCREENSHOT_PROMPT)
     await callback.answer()
     await state.set_state(UserStates.UPLOADING_PAYMENT_SCREENSHOT)
     
     # Сохраняем ID заказа в состоянии
     await state.update_data(order_id=order.id)
-
-
-@router.callback_query(F.data == "payment_cash", StateFilter(UserStates.CHOOSING_PAYMENT))
-async def choose_cash_payment(callback: CallbackQuery, state: FSMContext, user: User):
-    """Выбрать оплату наличными"""
-    async with async_session_maker() as session:
-        cart = await CartService.get_cart_with_items(session, user.id)
-        
-        if not cart or not cart.items:
-            await callback.answer("❌ Корзина пуста", show_alert=True)
-            return
-        
-        # Создаем заказ
-        from app.services.order import OrderService
-        order = await OrderService.create_order_from_cart(
-            session, user.id, payment_method="cash"
-        )
-        await session.commit()
-        
-        if not order:
-            await callback.answer("❌ Ошибка создания заказа", show_alert=True)
-            return
-    
-    # Показываем информацию о заказе
-    payment_text = texts.PAYMENT_CASH_INFO.format(
-        amount=format_price(order.total_amount)
-    )
-    
-    await callback.message.edit_text(payment_text)
-    
-    order_created_text = texts.ORDER_CREATED.format(
-        order_id=order.id,
-        total_amount=format_price(order.total_amount)
-    )
-    
-    await callback.message.answer(
-        order_created_text,
-        reply_markup=get_main_menu_keyboard()
-    )
-    await callback.answer()
-    await state.set_state(UserStates.MAIN_MENU)
-    
-    # Уведомляем администратора о новом заказе
-    logging.info(f"Отправляем уведомление о заказе #{order.id} (наличные)")
-    await notify_admin_new_order(order, user, callback.bot)
 
 
 @router.message(
@@ -303,21 +260,10 @@ async def show_orders(message: Message, state: FSMContext, user: User):
     """Показать заказы пользователя"""
     await state.set_state(UserStates.VIEWING_ORDERS)
     
-    async with async_session_maker() as session:
-        from app.services.order import OrderService
-        orders = await OrderService.get_user_orders(session, user.id)
-        
-        if not orders:
-            await message.answer(
-                texts.NO_ORDERS,
-                reply_markup=get_main_menu_keyboard()
-            )
-            return
-        
-        await message.answer(
-            texts.ORDERS_LIST_MESSAGE,
-            reply_markup=get_orders_keyboard(orders)
-        )
+    await message.answer(
+        "📋 Ваши заказы\n\nВыберите категорию:",
+        reply_markup=get_orders_filter_keyboard()
+    )
 
 
 @router.callback_query(F.data.startswith("order_"))
@@ -365,9 +311,12 @@ async def show_order_details(callback: CallbackQuery, state: FSMContext, user: U
         # Можно ли повторить заказ
         can_repeat = order.status in ["completed", "ready"]
         
+        # Можно ли отменить заказ (только активные заказы)
+        can_cancel = order.status in ["pending_payment", "payment_received"]
+        
         await callback.message.edit_text(
             order_text,
-            reply_markup=get_order_details_keyboard(order.id, can_repeat)
+            reply_markup=get_order_details_keyboard(order.id, can_repeat, can_cancel)
         )
         await callback.answer()
 
@@ -483,3 +432,159 @@ async def back_to_orders(callback: CallbackQuery, state: FSMContext, user: User)
             reply_markup=get_orders_keyboard(orders)
         )
         await callback.answer()
+
+
+@router.callback_query(F.data == "orders_active")
+async def show_active_orders(callback: CallbackQuery, state: FSMContext, user: User):
+    """Показать активные заказы"""
+    async with async_session_maker() as session:
+        from app.services.order import OrderService
+        all_orders = await OrderService.get_user_orders(session, user.id)
+        orders = [order for order in all_orders if order.is_active]
+        
+        if not orders:
+            await callback.message.edit_text(
+                "🔥 Активных заказов нет\n\nВсе ваши заказы завершены или отменены.",
+                reply_markup=get_orders_filter_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        await callback.message.edit_text(
+            "🔥 Активные заказы:",
+            reply_markup=get_orders_keyboard(orders, "active")
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data == "orders_completed")
+async def show_completed_orders(callback: CallbackQuery, state: FSMContext, user: User):
+    """Показать завершенные заказы"""
+    async with async_session_maker() as session:
+        from app.services.order import OrderService
+        all_orders = await OrderService.get_user_orders(session, user.id)
+        orders = [order for order in all_orders if order.is_completed]
+        
+        if not orders:
+            await callback.message.edit_text(
+                "✅ Завершенных заказов нет\n\nВы еще не делали заказов или все они еще в процессе.",
+                reply_markup=get_orders_filter_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        await callback.message.edit_text(
+            "✅ Завершенные заказы:",
+            reply_markup=get_orders_keyboard(orders, "completed")
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data == "orders_all")
+async def show_all_orders(callback: CallbackQuery, state: FSMContext, user: User):
+    """Показать все заказы"""
+    async with async_session_maker() as session:
+        from app.services.order import OrderService
+        orders = await OrderService.get_user_orders(session, user.id)
+        
+        if not orders:
+            await callback.message.edit_text(
+                texts.NO_ORDERS,
+                reply_markup=get_main_menu_keyboard()
+            )
+            await callback.answer()
+            return
+        
+        await callback.message.edit_text(
+            "📋 Все ваши заказы:",
+            reply_markup=get_orders_keyboard(orders, "all")
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cancel_order_confirm_"))
+async def confirm_cancel_order(callback: CallbackQuery, state: FSMContext, user: User):
+    """Подтвердить отмену заказа"""
+    order_id = int(callback.data.split("_")[3])
+    
+    # Показываем подтверждение
+    confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Да, отменить", 
+                callback_data=f"cancel_order_final_{order_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Нет", 
+                callback_data=f"order_details_{order_id}"
+            )
+        ]
+    ])
+    
+    await callback.message.edit_text(
+        f"❓ Вы действительно хотите отменить заказ #{order_id}?\n\n"
+        f"Отменить можно только заказы в статусе 'Ожидает оплаты' или 'Оплачен, ожидает подтверждения'.",
+        reply_markup=confirm_keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cancel_order_final_"))
+async def final_cancel_order(callback: CallbackQuery, state: FSMContext, user: User):
+    """Финальная отмена заказа пользователем"""
+    order_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.services.order import OrderService
+        
+        # Получаем заказ для уведомления
+        from sqlalchemy import select
+        order_result = await session.execute(
+            select(Order).where(Order.id == order_id, Order.user_id == user.id)
+        )
+        order = order_result.scalar_one_or_none()
+        
+        if not order:
+            await callback.answer("❌ Заказ не найден", show_alert=True)
+            return
+        
+        # Проверяем, можно ли отменить заказ
+        if order.status not in ["pending_payment", "payment_received"]:
+            await callback.answer(
+                "❌ Этот заказ нельзя отменить в текущем статусе", 
+                show_alert=True
+            )
+            return
+        
+        # Отменяем заказ
+        success = await OrderService.cancel_order(session, order_id, user.id)
+        await session.commit()
+        
+        if success:
+            # Уведомляем администраторов об отмене
+            try:
+                from app.config import settings
+                if settings.notification_chat_id:
+                    await callback.bot.send_message(
+                        settings.notification_chat_id,
+                        f"❌ Клиент отменил заказ #{order_id}\n\n"
+                        f"👤 Пользователь: {user.first_name or 'Неизвестно'} "
+                        f"(@{user.username or 'нет'})\n"
+                        f"💰 Сумма: {order.total_amount} ₽\n"
+                        f"📊 Был в статусе: {texts.ORDER_STATUSES.get(order.status, order.status)}"
+                    )
+            except Exception as e:
+                print(f"Ошибка отправки уведомления админу: {e}")
+                
+            await callback.message.edit_text(
+                f"✅ Заказ #{order_id} отменён\n\n"
+                f"Если была произведена оплата, я свяжусь с вами для возврата средств."
+            )
+            await callback.message.answer(
+                "🏠 Добро пожаловать в главное меню!",
+                reply_markup=get_main_menu_keyboard()
+            )
+        else:
+            await callback.answer("❌ Ошибка при отмене заказа", show_alert=True)
+    
+    await state.set_state(UserStates.MAIN_MENU)

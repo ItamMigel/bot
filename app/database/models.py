@@ -11,13 +11,13 @@ from app.database.database import Base
 class OrderStatus(Enum):
     """Статусы заказов"""
     CART = "cart"  # Корзина (черновик)
-    PENDING_PAYMENT = "pending_payment"  # Ожидает оплаты
-    PAYMENT_CONFIRMATION = "payment_confirmation"  # Подтверждение оплаты админом
-    PENDING_CONFIRMATION = "pending_confirmation"  # Ожидает подтверждения админом (наличные)
-    CONFIRMED = "confirmed"  # Подтвержден, готовится
-    READY = "ready"  # Готов к выдаче
-    COMPLETED = "completed"  # Завершен
-    CANCELLED = "cancelled"  # Отменен
+    PENDING_PAYMENT = "pending_payment"  # 1. Заказ ожидает оплаты
+    PAYMENT_RECEIVED = "payment_received"  # 2. Заказ оплачен, ожидает подтверждения
+    CONFIRMED = "confirmed"  # 3. Оплата подтверждена, начинаю готовить
+    READY = "ready"  # 4. Заказ готов, можно забирать
+    COMPLETED = "completed"  # Заказ выполнен (забран/доставлен)
+    CANCELLED_BY_CLIENT = "cancelled_by_client"  # 5. Заказ отменен клиентом
+    CANCELLED_BY_MASTER = "cancelled_by_master"  # 6. Заказ отменен мастером
 
 
 class PaymentStatus(Enum):
@@ -116,6 +116,27 @@ class Order(Base):
     
     def __repr__(self):
         return f"<Order(id={self.id}, user_id={self.user_id}, status={self.status}, total={self.total_amount})>"
+    
+    @property
+    def is_active(self):
+        """Проверка, является ли заказ активным"""
+        active_statuses = [
+            OrderStatus.PENDING_PAYMENT.value,  # 1. Ожидает оплаты
+            OrderStatus.PAYMENT_RECEIVED.value,  # 2. Оплачен, ожидает подтверждения
+            OrderStatus.CONFIRMED.value,  # 3. Подтвержден, готовится
+            OrderStatus.READY.value  # 4. Готов к выдаче
+        ]
+        return self.status in active_statuses
+    
+    @property
+    def is_completed(self):
+        """Проверка, является ли заказ завершенным"""
+        completed_statuses = [
+            OrderStatus.COMPLETED.value,  # Заказ выполнен
+            OrderStatus.CANCELLED_BY_CLIENT.value,  # 5. Отменен клиентом
+            OrderStatus.CANCELLED_BY_MASTER.value  # 6. Отменен мастером
+        ]
+        return self.status in completed_statuses
 
 
 class OrderItem(Base):

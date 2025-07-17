@@ -20,12 +20,13 @@ async def cmd_start(message: Message, state: FSMContext, user: User):
     # Получаем количество товаров в корзине
     from app.services.cart import CartService
     from app.database import async_session_maker
+    from app.config import settings
     
     async with async_session_maker() as session:
         cart_count = await CartService.get_cart_count(session, user.id)
     
     await message.answer(
-        texts.START_MESSAGE,
+        settings.welcome_message,
         reply_markup=get_main_menu_keyboard(cart_count)
     )
 
@@ -53,8 +54,9 @@ async def main_menu(event: Message | CallbackQuery, state: FSMContext, user: Use
             cart_count = await CartService.get_cart_count(session, user.id)
     
     if isinstance(event, CallbackQuery):
+        from app.config import settings
         await event.message.edit_text(
-            texts.START_MESSAGE,
+            settings.welcome_message,
             reply_markup=None
         )
         await event.message.answer(

@@ -14,6 +14,16 @@ class Settings:
         self.bot_token: str = os.getenv("BOT_TOKEN", "")
         self.database_url: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bot.db")
         
+        # Приветственное сообщение
+        self.welcome_message: str = os.getenv(
+            "WELCOME_MESSAGE",
+            """🍽 Добро пожаловать в "Что Бы Приготовить"!
+
+Здесь вы можете заказать вкусные домашние заготовки и блюда.
+
+Выберите действие из меню ниже:"""
+        )
+        
         # Администраторы
         admin_ids_str = os.getenv("ADMIN_IDS", "")
         self.admin_ids: List[int] = []
@@ -21,11 +31,13 @@ class Settings:
             self.admin_ids = [int(x.strip()) for x in admin_ids_str.split(",") if x.strip()]
         
         # Настройки платежей
-        self.payment_card_number: str = os.getenv("PAYMENT_CARD_NUMBER", "")
+        self.payment_phone: str = os.getenv("PAYMENT_PHONE", "")
+        self.payment_card_sber: str = os.getenv("PAYMENT_CARD_SBER", "")
+        self.payment_card_tinkoff: str = os.getenv("PAYMENT_CARD_TINKOFF", "")
         self.payment_card_owner: str = os.getenv("PAYMENT_CARD_OWNER", "")
         self.payment_instructions: str = os.getenv(
             "PAYMENT_INSTRUCTIONS", 
-            "Переведите сумму на карту и отправьте скриншот"
+            "Переведите сумму и отправьте скриншот. В комментариях при оплате напишите Имя и Фамилию"
         )
         
         # Настройки уведомлений

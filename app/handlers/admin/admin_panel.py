@@ -3,6 +3,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from sqlalchemy import select, update, and_
+from datetime import datetime
 
 from app.database import async_session_maker, Order, OrderItem, Dish, User, OrderStatus, PaymentStatus
 from app.middlewares.admin import AdminMiddleware
@@ -47,13 +48,10 @@ async def admin_panel(message: Message):
 async def show_pending_orders(callback: CallbackQuery):
     """Показать заказы на модерации"""
     async with async_session_maker() as session:
-        # Заказы ожидающие подтверждения оплаты или подтверждения админом
+        # Заказы ожидающие подтверждения оплаты
         result = await session.execute(
             select(Order)
-            .where(Order.status.in_([
-                OrderStatus.PAYMENT_CONFIRMATION.value,
-                OrderStatus.PENDING_CONFIRMATION.value
-            ]))
+            .where(Order.status == OrderStatus.PAYMENT_RECEIVED.value)
             .order_by(Order.created_at.desc())
         )
         orders = result.scalars().all()
@@ -150,27 +148,26 @@ async def show_order_details(callback: CallbackQuery):
         keyboard = []
         
         # Кнопки действий в зависимости от статуса
-        if order.status == OrderStatus.PAYMENT_CONFIRMATION.value:
+        if order.status == OrderStatus.PAYMENT_RECEIVED.value:
             keyboard.extend([
                 [{"text": "✅ Подтвердить оплату", "callback_data": f"confirm_payment_{order_id}"}],
                 [{"text": "❌ Отклонить оплату", "callback_data": f"reject_payment_{order_id}"}]
             ])
-        elif order.status == OrderStatus.PENDING_CONFIRMATION.value:
-            keyboard.extend([
-                [{"text": "✅ Подтвердить заказ", "callback_data": f"confirm_order_{order_id}"}],
-                [{"text": "❌ Отклонить заказ", "callback_data": f"reject_order_{order_id}"}]
-            ])
         elif order.status == OrderStatus.CONFIRMED.value:
-            keyboard.append([{"text": "🍽 Заказ готов", "callback_data": f"set_status_{order_id}_ready"}])
+            keyboard.append([{"text": "🍽 Заказ готов", "callback_data": f"set_ready_{order_id}"}])
         elif order.status == OrderStatus.READY.value:
-            keyboard.append([{"text": "✅ Заказ выдан", "callback_data": f"set_status_{order_id}_completed"}])
+            keyboard.append([{"text": "✅ Заказ выдан", "callback_data": f"set_completed_{order_id}"}])
         
         # Общая кнопка изменения статуса
         keyboard.append([{"text": "📊 Изменить статус", "callback_data": f"change_status_{order_id}"}])
         
         # Кнопка отмены заказа (если он не завершен)
-        if order.status not in [OrderStatus.COMPLETED.value, OrderStatus.CANCELLED.value]:
-            keyboard.append([{"text": "🚫 Отменить заказ", "callback_data": f"set_status_{order_id}_cancelled"}])
+        if order.status not in [
+            OrderStatus.COMPLETED.value, 
+            OrderStatus.CANCELLED_BY_CLIENT.value,
+            OrderStatus.CANCELLED_BY_MASTER.value
+        ]:
+            keyboard.append([{"text": "🚫 Отменить заказ", "callback_data": f"cancel_by_master_{order_id}"}])
         
         keyboard.append([{"text": "🔙 К заказам", "callback_data": "admin_pending_orders"}])
         
@@ -772,7 +769,7 @@ async def confirm_payment(callback: CallbackQuery):
         result = await session.execute(
             update(Order)
             .where(Order.id == order_id)
-            .values(status="confirmed")
+            .values(status=OrderStatus.CONFIRMED.value)
         )
         
         if result.rowcount > 0:
@@ -810,7 +807,7 @@ async def reject_payment(callback: CallbackQuery):
         result = await session.execute(
             update(Order)
             .where(Order.id == order_id)
-            .values(status="cancelled")
+            .values(status=OrderStatus.CANCELLED_BY_MASTER.value)
         )
         
         if result.rowcount > 0:
@@ -1522,3 +1519,125 @@ async def delete_dish_execute(callback: CallbackQuery):
             ]]}
         )
         await callback.answer()
+
+
+@router.callback_query(F.data.startswith("set_ready_"))
+async def set_order_ready(callback: CallbackQuery):
+    """Установить статус заказа 'готов к выдаче'"""
+    order_id = int(callback.data.split("_")[2])
+    
+    async with async_session_maker() as session:
+        # Обновляем статус заказа
+        result = await session.execute(
+            update(Order)
+            .where(Order.id == order_id)
+            .values(status=OrderStatus.READY.value)
+        )
+        
+        if result.rowcount > 0:
+            await session.commit()
+            
+            # Получаем заказ для уведомления пользователя
+            order_result = await session.execute(
+                select(Order, User)
+                .join(User)
+                .where(Order.id == order_id)
+            )
+            order, user = order_result.first()
+            
+            # Уведомляем пользователя об изменении статуса
+            try:
+                await callback.bot.send_message(
+                    user.telegram_id,
+                    f"🎉 Ваш заказ #{order.id} готов к выдаче!\n\n"
+                    f"Можете забирать свой заказ на сумму {order.total_amount} ₽"
+                )
+            except Exception as e:
+                print(f"Ошибка отправки уведомления: {e}")
+            
+            await callback.answer("✅ Заказ готов к выдаче!", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка изменения статуса", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("set_completed_"))
+async def set_order_completed(callback: CallbackQuery):
+    """Установить статус заказа 'выполнен'"""
+    order_id = int(callback.data.split("_")[2])
+    
+    async with async_session_maker() as session:
+        # Обновляем статус заказа
+        result = await session.execute(
+            update(Order)
+            .where(Order.id == order_id)
+            .values(
+                status=OrderStatus.COMPLETED.value,
+                completed_at=datetime.utcnow()
+            )
+        )
+        
+        if result.rowcount > 0:
+            await session.commit()
+            
+            # Получаем заказ для уведомления пользователя
+            order_result = await session.execute(
+                select(Order, User)
+                .join(User)
+                .where(Order.id == order_id)
+            )
+            order, user = order_result.first()
+            
+            # Уведомляем пользователя об изменении статуса
+            try:
+                await callback.bot.send_message(
+                    user.telegram_id,
+                    f"✅ Заказ #{order.id} успешно выполнен!\n\n"
+                    f"Спасибо за заказ на сумму {order.total_amount} ₽\n"
+                    f"Буду рада видеть вас снова! 😊"
+                )
+            except Exception as e:
+                print(f"Ошибка отправки уведомления: {e}")
+            
+            await callback.answer("✅ Заказ выполнен!", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка изменения статуса", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("cancel_by_master_"))
+async def cancel_order_by_master(callback: CallbackQuery):
+    """Отменить заказ мастером"""
+    order_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        # Обновляем статус заказа
+        result = await session.execute(
+            update(Order)
+            .where(Order.id == order_id)
+            .values(status=OrderStatus.CANCELLED_BY_MASTER.value)
+        )
+        
+        if result.rowcount > 0:
+            await session.commit()
+            
+            # Получаем заказ для уведомления пользователя
+            order_result = await session.execute(
+                select(Order, User)
+                .join(User)
+                .where(Order.id == order_id)
+            )
+            order, user = order_result.first()
+            
+            # Уведомляем пользователя об отмене заказа
+            try:
+                await callback.bot.send_message(
+                    user.telegram_id,
+                    f"❌ К сожалению, заказ #{order.id} отменён.\n\n"
+                    f"Сумма {order.total_amount} ₽ будет возвращена.\n"
+                    f"Я свяжусь с вами для уточнения деталей."
+                )
+            except Exception as e:
+                print(f"Ошибка отправки уведомления: {e}")
+            
+            await callback.answer("❌ Заказ отменён!", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка отмены заказа", show_alert=True)
