@@ -216,7 +216,7 @@ async def retry_screenshot_upload(callback: CallbackQuery, state: FSMContext):
     # Состояние остается UPLOADING_PAYMENT_SCREENSHOT
 
 
-@router.callback_query(F.data.startswith("cancel_order_"))
+@router.callback_query(F.data.regexp(r"^cancel_order_\d+$"))
 async def cancel_payment_order(callback: CallbackQuery, state: FSMContext, user: User):
     """Отменить заказ на этапе ожидания скриншота"""
     order_id = int(callback.data.split("_")[2])
@@ -508,7 +508,7 @@ async def show_all_orders(callback: CallbackQuery, state: FSMContext, user: User
         await callback.answer()
 
 
-@router.callback_query(F.data.startswith("cancel_order_confirm_"))
+@router.callback_query(F.data.regexp(r"^cancel_order_confirm_\d+$"))
 async def confirm_cancel_order(callback: CallbackQuery, state: FSMContext, user: User):
     """Подтвердить отмену заказа"""
     order_id = int(callback.data.split("_")[3])
@@ -535,7 +535,7 @@ async def confirm_cancel_order(callback: CallbackQuery, state: FSMContext, user:
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("cancel_order_final_"))
+@router.callback_query(F.data.regexp(r"^cancel_order_final_\d+$"))
 async def final_cancel_order(callback: CallbackQuery, state: FSMContext, user: User):
     """Финальная отмена заказа пользователем"""
     order_id = int(callback.data.split("_")[3])
