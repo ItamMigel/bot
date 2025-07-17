@@ -10,6 +10,7 @@ class UserStates(StatesGroup):
     BROWSING_MENU = State()
     VIEWING_DISH = State()
     ADDING_TO_CART = State()
+    ENTERING_QUANTITY = State()  # Новое состояние для ввода количества
     
     # Корзина
     VIEWING_CART = State()
@@ -62,6 +63,7 @@ class AdminStates(StatesGroup):
     ENTERING_DISH_NAME = State()
     ENTERING_DISH_DESCRIPTION = State()
     ENTERING_DISH_PRICE = State()
+    ENTERING_DISH_LINK = State()  # Новое состояние для ввода ссылки на пост
     UPLOADING_DISH_IMAGE = State()
     CHOOSING_DISH_CATEGORY = State()
     

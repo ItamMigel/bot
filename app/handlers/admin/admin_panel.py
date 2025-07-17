@@ -22,12 +22,12 @@ async def admin_panel(message: Message):
     """Админ-панель"""
     keyboard = [
         [
-            {"text": "📋 Заказы на модерации", "callback_data": "admin_pending_orders"},
-            {"text": "📊 Все заказы", "callback_data": "admin_all_orders"}
+            {"text": "📋 Управление заказами", "callback_data": "admin_orders_menu"},
+            {"text": "🍽 Управление меню", "callback_data": "admin_menu"}
         ],
         [
             {"text": "📈 Статистика", "callback_data": "admin_stats"},
-            {"text": "⚙️ Управление меню", "callback_data": "admin_menu"}
+            {"text": "⚙️ Настройки", "callback_data": "admin_settings"}
         ],
         [
             {"text": "🔙 Главное меню", "callback_data": "main_menu"}
@@ -42,6 +42,154 @@ async def admin_panel(message: Message):
         reply_markup=admin_keyboard,
         parse_mode="HTML"
     )
+
+
+@router.callback_query(F.data == "admin_orders_menu")
+async def show_orders_menu(callback: CallbackQuery):
+    """Показать меню управления заказами"""
+    async with async_session_maker() as session:
+        from sqlalchemy import func
+        from app.database import Order
+        
+        # Подсчитываем заказы по статусам
+        status_counts = {}
+        for status in [
+            OrderStatus.PENDING_PAYMENT.value,
+            OrderStatus.PAYMENT_RECEIVED.value,
+            OrderStatus.CONFIRMED.value,
+            OrderStatus.READY.value,
+            OrderStatus.COMPLETED.value
+        ]:
+            count = await session.execute(
+                select(func.count(Order.id)).where(Order.status == status)
+            )
+            status_counts[status] = count.scalar() or 0
+    
+    text = "📋 <b>Управление заказами</b>\n\nВыберите фильтр:"
+    
+    keyboard = [
+        [
+            {"text": f"⏳ Ожидают оплаты ({status_counts.get(OrderStatus.PENDING_PAYMENT.value, 0)})", 
+             "callback_data": f"filter_orders_{OrderStatus.PENDING_PAYMENT.value}"},
+        ],
+        [
+            {"text": f"💰 Требуют подтверждения ({status_counts.get(OrderStatus.PAYMENT_RECEIVED.value, 0)})", 
+             "callback_data": f"filter_orders_{OrderStatus.PAYMENT_RECEIVED.value}"},
+        ],
+        [
+            {"text": f"👩‍🍳 В работе ({status_counts.get(OrderStatus.CONFIRMED.value, 0)})", 
+             "callback_data": f"filter_orders_{OrderStatus.CONFIRMED.value}"},
+        ],
+        [
+            {"text": f"🎉 Готовые ({status_counts.get(OrderStatus.READY.value, 0)})", 
+             "callback_data": f"filter_orders_{OrderStatus.READY.value}"},
+        ],
+        [
+            {"text": f"✅ Завершенные ({status_counts.get(OrderStatus.COMPLETED.value, 0)})", 
+             "callback_data": f"filter_orders_{OrderStatus.COMPLETED.value}"},
+        ],
+        [
+            {"text": "📊 Все заказы", "callback_data": "filter_orders_all"},
+            {"text": "❌ Отмененные", "callback_data": "filter_orders_cancelled"}
+        ],
+        [
+            {"text": "🔙 Назад", "callback_data": "back_to_admin_panel"}
+        ]
+    ]
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup={"inline_keyboard": keyboard},
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("filter_orders_"))
+async def show_filtered_orders(callback: CallbackQuery):
+    """Показать заказы по выбранному фильтру"""
+    # Правильно извлекаем filter_type - берем все после "filter_orders_"
+    filter_type = callback.data.replace("filter_orders_", "")
+    
+    async with async_session_maker() as session:
+        from sqlalchemy.orm import selectinload
+        
+        # Строим запрос в зависимости от фильтра
+        query = select(Order).options(
+            selectinload(Order.user),
+            selectinload(Order.items).selectinload(OrderItem.dish)
+        ).order_by(Order.created_at.desc()).limit(20)
+        
+        if filter_type == "all":
+            title = "Все заказы"
+        elif filter_type == "cancelled":
+            title = "Отмененные заказы"
+            query = query.where(Order.status.in_([
+                OrderStatus.CANCELLED_BY_CLIENT.value,
+                OrderStatus.CANCELLED_BY_MASTER.value
+            ]))
+        else:
+            # Конкретный статус
+            from app.utils.texts import ORDER_STATUSES
+            title = f"Заказы: {ORDER_STATUSES.get(filter_type, filter_type)}"
+            query = query.where(Order.status == filter_type)
+        
+        result = await session.execute(query)
+        orders = result.scalars().all()
+        
+        if not orders:
+            text = f"📋 <b>{title}</b>\n\n❌ Заказов не найдено"
+        else:
+            text = f"📋 <b>{title}</b>\n\n"
+            
+            for order in orders:
+                from app.utils.helpers import format_price
+                from app.utils.texts import ORDER_STATUSES
+                
+                status_text = ORDER_STATUSES.get(order.status, order.status)
+                user_name = order.user.first_name or "Неизвестный"
+                
+                text += (
+                    f"🔹 <b>#{order.id}</b> | {status_text}\n"
+                    f"👤 {user_name} | 💰 {format_price(order.total_amount)}\n"
+                    f"📅 {order.created_at.strftime('%d.%m %H:%M')}\n\n"
+                )
+        
+        # Кнопки для пагинации и навигации
+        keyboard = []
+        
+        # Кнопки заказов для детального просмотра
+        if orders:
+            order_buttons = []
+            for i, order in enumerate(orders[:10]):  # Первые 10 заказов
+                order_buttons.append(
+                    {"text": f"#{order.id}", "callback_data": f"admin_order_{order.id}"}
+                )
+            
+            # Разбиваем кнопки по 5 в ряд
+            for i in range(0, len(order_buttons), 5):
+                keyboard.append(order_buttons[i:i+5])
+        
+        keyboard.extend([
+            [{"text": "🔄 Обновить", "callback_data": callback.data}],
+            [{"text": "🔙 К фильтрам", "callback_data": "admin_orders_menu"}],
+            [{"text": "🏠 Главное меню", "callback_data": "back_to_admin_panel"}]
+        ])
+        
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup={"inline_keyboard": keyboard},
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            # Если сообщение не изменилось, просто отвечаем без алерта
+            if "message is not modified" in str(e).lower():
+                await callback.answer()
+            else:
+                await callback.answer(f"❌ Ошибка: {str(e)}", show_alert=True)
+            return
+    await callback.answer()
 
 
 @router.callback_query(F.data == "admin_pending_orders")
@@ -153,10 +301,17 @@ async def show_order_details(callback: CallbackQuery):
                 [{"text": "✅ Подтвердить оплату", "callback_data": f"confirm_payment_{order_id}"}],
                 [{"text": "❌ Отклонить оплату", "callback_data": f"reject_payment_{order_id}"}]
             ])
+            # Кнопка для просмотра фото оплаты
+            if order.payment_photo_file_id:
+                keyboard.append([{"text": "🖼 Показать фото оплаты", "callback_data": f"show_payment_photo_{order_id}"}])
         elif order.status == OrderStatus.CONFIRMED.value:
             keyboard.append([{"text": "🍽 Заказ готов", "callback_data": f"set_ready_{order_id}"}])
         elif order.status == OrderStatus.READY.value:
             keyboard.append([{"text": "✅ Заказ выдан", "callback_data": f"set_completed_{order_id}"}])
+        
+        # Кнопка для просмотра фото оплаты (для всех статусов, если фото есть)
+        if order.payment_photo_file_id and order.status != OrderStatus.PAYMENT_RECEIVED.value:
+            keyboard.append([{"text": "🖼 Показать фото оплаты", "callback_data": f"show_payment_photo_{order_id}"}])
         
         # Общая кнопка изменения статуса
         keyboard.append([{"text": "📊 Изменить статус", "callback_data": f"change_status_{order_id}"}])
@@ -169,13 +324,31 @@ async def show_order_details(callback: CallbackQuery):
         ]:
             keyboard.append([{"text": "🚫 Отменить заказ", "callback_data": f"cancel_by_master_{order_id}"}])
         
-        keyboard.append([{"text": "🔙 К заказам", "callback_data": "admin_pending_orders"}])
+        keyboard.append([{"text": "🔙 К заказам", "callback_data": "admin_orders_menu"}])
         
-        await callback.message.edit_text(
-            text,
-            reply_markup={"inline_keyboard": keyboard},
-            parse_mode="HTML"
-        )
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup={"inline_keyboard": keyboard},
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            # Если не можем редактировать текст (например, сообщение содержит фото),
+            # удаляем старое сообщение и отправляем новое
+            if "no text in the message to edit" in str(e).lower() or "message to edit not found" in str(e).lower():
+                try:
+                    await callback.message.delete()
+                except:
+                    pass  # Игнорируем ошибки удаления
+                await callback.bot.send_message(
+                    callback.from_user.id,
+                    text,
+                    reply_markup={"inline_keyboard": keyboard},
+                    parse_mode="HTML"
+                )
+            elif "message is not modified" not in str(e).lower():
+                await callback.answer(f"❌ Ошибка: {str(e)}", show_alert=True)
+                return
     
     await callback.answer()
 
@@ -274,7 +447,7 @@ async def show_all_orders(callback: CallbackQuery):
             username = f"@{user.username}" if user and user.username else f"ID: {user.telegram_id}" if user else "Неизвестен"
             status_emoji = {
                 OrderStatus.PENDING_PAYMENT.value: "⏳",
-                OrderStatus.PAYMENT_CONFIRMATION.value: "🔍",
+                OrderStatus.PAYMENT_RECEIVED.value: "🔍",
                 OrderStatus.CONFIRMED.value: "✅",
                 OrderStatus.READY.value: "🍽",
                 OrderStatus.COMPLETED.value: "✅",
@@ -300,91 +473,132 @@ async def show_all_orders(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "admin_stats")
-async def show_stats(callback: CallbackQuery):
-    """Показать статистику"""
+async def show_stats_menu(callback: CallbackQuery):
+    """Показать меню статистики"""
+    text = "📈 <b>Статистика заказов</b>\n\nВыберите период для анализа:"
+    
+    keyboard = [
+        [
+            {"text": "📅 За сегодня", "callback_data": "stats_today"},
+            {"text": "📊 За неделю", "callback_data": "stats_week"}
+        ],
+        [
+            {"text": "📈 За месяц", "callback_data": "stats_month"},
+            {"text": "📋 За квартал", "callback_data": "stats_quarter"}
+        ],
+        [
+            {"text": "📊 За год", "callback_data": "stats_year"},
+            {"text": "🎯 Произвольный период", "callback_data": "stats_custom"}
+        ],
+        [
+            {"text": "👥 По пользователям", "callback_data": "stats_users"},
+            {"text": "🍽 По блюдам", "callback_data": "stats_dishes"}
+        ],
+        [
+            {"text": "🔙 Назад", "callback_data": "back_to_admin_panel"}
+        ]
+    ]
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup={"inline_keyboard": keyboard},
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("stats_"))
+async def show_detailed_stats(callback: CallbackQuery):
+    """Показать детальную статистику по выбранному периоду"""
+    period = callback.data.split("_")[1]
+    
     async with async_session_maker() as session:
-        # Общая статистика заказов
-        from sqlalchemy import func, and_
+        from sqlalchemy import func, and_, desc
         from datetime import datetime, timedelta
         
-        today = datetime.now().date()
-        week_ago = today - timedelta(days=7)
-        month_ago = today - timedelta(days=30)
+        now = datetime.now()
         
-        # Статистика за сегодня
-        today_orders = await session.execute(
-            select(func.count(Order.id), func.sum(Order.total_amount))
-            .where(
-                and_(
-                    func.date(Order.created_at) == today,
-                    Order.status.in_([
-                        OrderStatus.CONFIRMED.value,
-                        OrderStatus.READY.value,
-                        OrderStatus.COMPLETED.value
-                    ])
-                )
+        # Определяем период
+        if period == "today":
+            start_date = now.date()
+            period_name = "за сегодня"
+        elif period == "week":
+            start_date = (now - timedelta(days=7)).date()
+            period_name = "за неделю"
+        elif period == "month":
+            start_date = (now - timedelta(days=30)).date()
+            period_name = "за месяц"
+        elif period == "quarter":
+            start_date = (now - timedelta(days=90)).date()
+            period_name = "за квартал"
+        elif period == "year":
+            start_date = (now - timedelta(days=365)).date()
+            period_name = "за год"
+        elif period == "users":
+            await show_users_stats(callback, session)
+            return
+        elif period == "dishes":
+            await show_dishes_stats(callback, session)
+            return
+        else:
+            await callback.answer("⚠️ Функция в разработке", show_alert=True)
+            return
+        
+        # Статистика по периоду
+        orders_query = select(func.count(Order.id), func.sum(Order.total_amount))
+        if period != "today":
+            orders_query = orders_query.where(func.date(Order.created_at) >= start_date)
+        else:
+            orders_query = orders_query.where(func.date(Order.created_at) == start_date)
+        
+        # Только завершенные заказы
+        completed_orders = await session.execute(
+            orders_query.where(
+                Order.status.in_([
+                    OrderStatus.CONFIRMED.value,
+                    OrderStatus.READY.value,
+                    OrderStatus.COMPLETED.value
+                ])
             )
         )
-        today_count, today_sum = today_orders.first()
-        today_sum = today_sum or 0
+        completed_count, completed_sum = completed_orders.first()
+        completed_sum = completed_sum or 0
         
-        # Статистика за неделю
-        week_orders = await session.execute(
-            select(func.count(Order.id), func.sum(Order.total_amount))
-            .where(
-                and_(
-                    func.date(Order.created_at) >= week_ago,
-                    Order.status.in_([
-                        OrderStatus.CONFIRMED.value,
-                        OrderStatus.READY.value,
-                        OrderStatus.COMPLETED.value
-                    ])
-                )
-            )
-        )
-        week_count, week_sum = week_orders.first()
-        week_sum = week_sum or 0
+        # Все заказы за период
+        all_orders = await session.execute(orders_query)
+        total_count, total_sum = all_orders.first()
+        total_sum = total_sum or 0
         
-        # Статистика за месяц
-        month_orders = await session.execute(
-            select(func.count(Order.id), func.sum(Order.total_amount))
-            .where(
-                and_(
-                    func.date(Order.created_at) >= month_ago,
-                    Order.status.in_([
-                        OrderStatus.CONFIRMED.value,
-                        OrderStatus.READY.value,
-                        OrderStatus.COMPLETED.value
-                    ])
-                )
-            )
-        )
-        month_count, month_sum = month_orders.first()
-        month_sum = month_sum or 0
+        # Статистика по статусам за период
+        status_query = select(Order.status, func.count(Order.id))
+        if period != "today":
+            status_query = status_query.where(func.date(Order.created_at) >= start_date)
+        else:
+            status_query = status_query.where(func.date(Order.created_at) == start_date)
         
-        # Статистика по статусам
-        pending_orders = await session.execute(
-            select(func.count(Order.id))
-            .where(Order.status == OrderStatus.PAYMENT_CONFIRMATION.value)
+        status_stats = await session.execute(
+            status_query.group_by(Order.status)
         )
-        pending_count = pending_orders.scalar()
+        
+        status_text = ""
+        for status, count in status_stats:
+            from app.utils.texts import ORDER_STATUSES
+            status_text += f"• {ORDER_STATUSES.get(status, status)}: {count}\n"
         
         text = (
-            "📈 <b>Статистика заказов</b>\n\n"
-            f"📅 <b>За сегодня:</b>\n"
-            f"• Заказов: {today_count}\n"
-            f"• Сумма: {today_sum} ₽\n\n"
-            f"📊 <b>За неделю:</b>\n"
-            f"• Заказов: {week_count}\n"
-            f"• Сумма: {week_sum} ₽\n\n"
-            f"📊 <b>За месяц:</b>\n"
-            f"• Заказов: {month_count}\n"
-            f"• Сумма: {month_sum} ₽\n\n"
-            f"🔍 <b>На модерации:</b> {pending_count} заказов"
+            f"📈 <b>Статистика {period_name}</b>\n\n"
+            f"✅ <b>Завершенные заказы:</b>\n"
+            f"• Количество: {completed_count}\n"
+            f"• Сумма: {completed_sum} руб\n\n"
+            f"📊 <b>Все заказы:</b>\n"
+            f"• Количество: {total_count}\n"
+            f"• Общая сумма: {total_sum} руб\n\n"
+            f"📋 <b>По статусам:</b>\n{status_text}"
         )
         
         keyboard = [
-            [{"text": "🔙 Назад", "callback_data": "back_to_admin_panel"}]
+            [{"text": "🔙 К выбору периода", "callback_data": "admin_stats"}],
+            [{"text": "🏠 Главное меню", "callback_data": "back_to_admin_panel"}]
         ]
         
         await callback.message.edit_text(
@@ -392,6 +606,104 @@ async def show_stats(callback: CallbackQuery):
             reply_markup={"inline_keyboard": keyboard},
             parse_mode="HTML"
         )
+    await callback.answer()
+
+
+async def show_users_stats(callback: CallbackQuery, session):
+    """Показать статистику по пользователям"""
+    from sqlalchemy import func, desc
+    
+    # Топ пользователей по количеству заказов
+    users_orders = await session.execute(
+        select(
+            User.first_name,
+            User.last_name,
+            User.username,
+            func.count(Order.id).label('order_count'),
+            func.sum(Order.total_amount).label('total_spent')
+        )
+        .join(Order, User.id == Order.user_id)
+        .where(Order.status.in_([
+            OrderStatus.CONFIRMED.value,
+            OrderStatus.READY.value,
+            OrderStatus.COMPLETED.value
+        ]))
+        .group_by(User.id)
+        .order_by(desc('order_count'))
+        .limit(10)
+    )
+    
+    users_text = ""
+    for i, (first_name, last_name, username, order_count, total_spent) in enumerate(users_orders, 1):
+        name = f"{first_name or ''} {last_name or ''}".strip() or username or "Неизвестный"
+        users_text += f"{i}. {name}\n   📦 {order_count} заказов, 💰 {total_spent or 0} руб\n\n"
+    
+    if not users_text:
+        users_text = "Нет данных о завершенных заказах"
+    
+    text = (
+        f"👥 <b>Топ-10 клиентов</b>\n\n"
+        f"{users_text}"
+    )
+    
+    keyboard = [
+        [{"text": "🔙 К выбору периода", "callback_data": "admin_stats"}],
+        [{"text": "🏠 Главное меню", "callback_data": "back_to_admin_panel"}]
+    ]
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup={"inline_keyboard": keyboard},
+        parse_mode="HTML"
+    )
+
+
+async def show_dishes_stats(callback: CallbackQuery, session):
+    """Показать статистику по блюдам"""
+    from sqlalchemy import func, desc
+    
+    # Топ блюд по количеству заказов
+    dishes_orders = await session.execute(
+        select(
+            Dish.name,
+            func.sum(OrderItem.quantity).label('total_quantity'),
+            func.count(OrderItem.id).label('order_count'),
+            func.sum(OrderItem.quantity * OrderItem.price).label('total_revenue')
+        )
+        .join(OrderItem, Dish.id == OrderItem.dish_id)
+        .join(Order, OrderItem.order_id == Order.id)
+        .where(Order.status.in_([
+            OrderStatus.CONFIRMED.value,
+            OrderStatus.READY.value,
+            OrderStatus.COMPLETED.value
+        ]))
+        .group_by(Dish.id)
+        .order_by(desc('total_quantity'))
+        .limit(10)
+    )
+    
+    dishes_text = ""
+    for i, (name, total_quantity, order_count, total_revenue) in enumerate(dishes_orders, 1):
+        dishes_text += f"{i}. {name}\n   🍽 {total_quantity} порций в {order_count} заказах\n   💰 {total_revenue or 0} руб\n\n"
+    
+    if not dishes_text:
+        dishes_text = "Нет данных о проданных блюдах"
+    
+    text = (
+        f"🍽 <b>Топ-10 блюд</b>\n\n"
+        f"{dishes_text}"
+    )
+    
+    keyboard = [
+        [{"text": "🔙 К выбору периода", "callback_data": "admin_stats"}],
+        [{"text": "🏠 Главное меню", "callback_data": "back_to_admin_panel"}]
+    ]
+    
+    await callback.message.edit_text(
+        text,
+        reply_markup={"inline_keyboard": keyboard},
+        parse_mode="HTML"
+    )
 
 
 @router.callback_query(F.data == "admin_menu")
@@ -652,8 +964,14 @@ async def edit_dish(callback: CallbackQuery):
                  "callback_data": f"toggle_dish_{dish_id}"}
             ],
             [
-                {"text": "� Изменить цену", "callback_data": f"edit_dish_price_{dish_id}"},
+                {"text": "✏️ Изменить название", "callback_data": f"edit_dish_name_{dish_id}"}
+            ],
+            [
+                {"text": "💰 Изменить цену", "callback_data": f"edit_dish_price_{dish_id}"},
                 {"text": "📄 Изменить описание", "callback_data": f"edit_dish_description_{dish_id}"}
+            ],
+            [
+                {"text": "🔗 Изменить ссылку на пост", "callback_data": f"edit_dish_link_{dish_id}"}
             ],
             [
                 {"text": "🗑 Удалить", "callback_data": f"delete_dish_{dish_id}"}
@@ -736,7 +1054,7 @@ async def back_to_admin_panel(callback: CallbackQuery):
     """Вернуться в админ-панель"""
     keyboard = [
         [
-            {"text": "📋 Заказы на модерации", "callback_data": "admin_pending_orders"},
+            {"text": "📋 Управление заказами", "callback_data": "admin_orders_menu"},
             {"text": "📊 Все заказы", "callback_data": "admin_all_orders"}
         ],
         [
@@ -786,7 +1104,7 @@ async def confirm_payment(callback: CallbackQuery):
             # Уведомляем пользователя об изменении статуса
             from app.services.notifications import NotificationService
             await NotificationService.notify_order_status_change(
-                callback.bot, order, user, "payment_confirmation", "confirmed"
+                callback.bot, order, user, "payment_received", "confirmed"
             )
             
             await callback.answer("✅ Оплата подтверждена!", show_alert=True)
@@ -824,7 +1142,7 @@ async def reject_payment(callback: CallbackQuery):
             # Уведомляем пользователя об отклонении
             from app.services.notifications import NotificationService
             await NotificationService.notify_order_status_change(
-                callback.bot, order, user, "payment_confirmation", "cancelled"
+                callback.bot, order, user, "payment_received", "cancelled"
             )
             
             await callback.answer("❌ Оплата отклонена", show_alert=True)
@@ -1250,7 +1568,7 @@ async def add_dish_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(StateFilter(AdminStates.ENTERING_DISH_NAME))
 async def add_dish_name(message: Message, state: FSMContext):
-    """Получить название нового блюда"""
+    """Получить название нового блюда или изменить название существующего"""
     dish_name = message.text.strip()
     
     if len(dish_name) < 2 or len(dish_name) > 150:
@@ -1260,11 +1578,65 @@ async def add_dish_name(message: Message, state: FSMContext):
         )
         return
     
-    await state.update_data(dish_name=dish_name)
-    await state.set_state(AdminStates.ENTERING_DISH_PRICE)
-    await message.answer(
-        f"💰 Введите цену блюда '{dish_name}' (только число, например: 350):"
-    )
+    data = await state.get_data()
+    dish_id = data.get("dish_id")
+    
+    if dish_id:
+        # Редактирование существующего блюда - меняем только название
+        async with async_session_maker() as session:
+            from app.database import Dish
+            
+            dish = await session.get(Dish, dish_id)
+            if not dish:
+                await message.answer("❌ Блюдо не найдено")
+                await state.clear()
+                return
+            
+            # Проверяем, что блюдо с таким именем не существует в этой категории
+            from sqlalchemy import select, and_
+            existing_dish = await session.execute(
+                select(Dish).where(
+                    and_(
+                        Dish.category_id == dish.category_id,
+                        Dish.name == dish_name,
+                        Dish.id != dish_id  # исключаем текущее блюдо
+                    )
+                )
+            )
+            if existing_dish.scalar_one_or_none():
+                await message.answer(
+                    "❌ Блюдо с таким названием уже существует в этой категории.\n"
+                    "Введите другое название:"
+                )
+                return
+            
+            # Обновляем название
+            old_name = dish.name
+            dish.name = dish_name
+            await session.commit()
+            
+            await message.answer(
+                f"✅ Название блюда изменено!\n"
+                f"Было: <b>{old_name}</b>\n"
+                f"Стало: <b>{dish_name}</b>",
+                parse_mode="HTML"
+            )
+            
+            # Возвращаемся к редактированию блюда
+            await state.clear()
+            from app.handlers.admin.admin_panel import edit_dish
+            # Имитируем callback для возврата к меню редактирования
+            callback_data = f"edit_dish_{dish_id}"
+            await message.answer("Возвращаемся к редактированию блюда...")
+            # TODO: Здесь нужно показать меню редактирования блюда
+            
+    else:
+        # Создание нового блюда - продолжаем как раньше
+        await state.update_data(dish_name=dish_name)
+        await state.set_state(AdminStates.ENTERING_DISH_PRICE)
+        await message.answer(
+            f"💰 Введите цену блюда '{dish_name}' (только число, например: 350):"
+        )
 
 
 @router.message(StateFilter(AdminStates.ENTERING_DISH_PRICE))
@@ -1362,43 +1734,54 @@ async def handle_dish_description_input(message: Message, state: FSMContext):
         category_id = data.get("category_id")
         dish_name = data.get("dish_name")
         dish_price = data.get("dish_price")
-        
-        async with async_session_maker() as session:
-            from app.database import Dish
-            
-            # Проверяем, что блюдо с таким именем не существует в этой категории
-            existing = await session.execute(
-                select(Dish).where(Dish.name == dish_name, Dish.category_id == category_id)
-            )
-            if existing.scalar_one_or_none():
-                await message.answer(
-                    "❌ Блюдо с таким названием уже существует в этой категории.\n"
-                    "Введите другое название:"
-                )
-                await state.set_state(AdminStates.ENTERING_DISH_NAME)
-                return
-            
-            # Создаем новое блюдо
-            new_dish = Dish(
-                name=dish_name,
-                description=new_description,
-                price=dish_price,
-                category_id=category_id,
-                is_available=True,
-                sort_order=0
-            )
-            session.add(new_dish)
-            await session.commit()
-            
-            await message.answer(
-                f"✅ Блюдо '{dish_name}' успешно добавлено!\n"
-                f"💰 Цена: {dish_price} ₽\n"
-                f"📝 Описание: {new_description or 'не указано'}",
-                reply_markup={"inline_keyboard": [[
-                    {"text": f"🍽 К блюдам категории", "callback_data": f"dishes_in_category_{category_id}"}
-                ]]}
-            )
+
+
+@router.message(StateFilter(AdminStates.ENTERING_DISH_LINK))
+async def handle_dish_link_input(message: Message, state: FSMContext):
+    """Обработать ввод ссылки на пост о блюде"""
+    new_link = message.text.strip()
+    
+    # Валидация ссылки
+    if new_link == "-":
+        new_link = None
+    elif new_link and not (new_link.startswith("https://t.me/") or new_link.startswith("http://t.me/")):
+        await message.answer(
+            "❌ Неверный формат ссылки. Ссылка должна начинаться с https://t.me/\n"
+            "Введите ссылку еще раз (или '-' для удаления):"
+        )
+        return
+    
+    data = await state.get_data()
+    dish_id = data.get("dish_id")
+    
+    if not dish_id:
+        await message.answer("❌ Ошибка: блюдо не найдено")
         await state.clear()
+        return
+    
+    # Обновляем ссылку
+    async with async_session_maker() as session:
+        from app.database import Dish
+        
+        dish = await session.get(Dish, dish_id)
+        if not dish:
+            await message.answer("❌ Блюдо не найдено")
+            await state.clear()
+            return
+        
+        dish.telegram_post_url = new_link
+        await session.commit()
+        
+        link_text = new_link or "удалена"
+        await message.answer(
+            f"✅ Ссылка на пост для блюда '{dish.name}' изменена!\n"
+            f"🔗 Новая ссылка: {link_text}",
+            reply_markup={"inline_keyboard": [[
+                {"text": "🍽 К редактированию блюда", "callback_data": f"edit_dish_{dish_id}"}
+            ]]}
+        )
+    
+    await state.clear()
 
 
 @router.callback_query(F.data.startswith("edit_dish_price_"))
@@ -1427,6 +1810,31 @@ async def edit_dish_price_start(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
 
 
+@router.callback_query(F.data.startswith("edit_dish_name_"))
+async def edit_dish_name_start(callback: CallbackQuery, state: FSMContext):
+    """Начать изменение названия блюда"""
+    dish_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.database import Dish
+        dish = await session.get(Dish, dish_id)
+        
+        if not dish:
+            await callback.answer("❌ Блюдо не найдено", show_alert=True)
+            return
+        
+        await callback.message.edit_text(
+            f"✏️ <b>Изменение названия блюда</b>\n\n"
+            f"Текущее название: <b>{dish.name}</b>\n\n"
+            f"Введите новое название:",
+            parse_mode="HTML"
+        )
+        
+        await state.set_state(AdminStates.ENTERING_DISH_NAME)
+        await state.update_data(dish_id=dish_id)
+        await callback.answer()
+
+
 @router.callback_query(F.data.startswith("edit_dish_description_"))
 async def edit_dish_description_start(callback: CallbackQuery, state: FSMContext):
     """Начать изменение описания блюда"""
@@ -1450,6 +1858,35 @@ async def edit_dish_description_start(callback: CallbackQuery, state: FSMContext
         )
         
         await state.set_state(AdminStates.ENTERING_DISH_DESCRIPTION)
+        await state.update_data(dish_id=dish_id)
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_dish_link_"))
+async def edit_dish_link_start(callback: CallbackQuery, state: FSMContext):
+    """Начать изменение ссылки на пост о блюде"""
+    dish_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.database import Dish
+        dish = await session.get(Dish, dish_id)
+        
+        if not dish:
+            await callback.answer("❌ Блюдо не найдено", show_alert=True)
+            return
+        
+        current_link = dish.telegram_post_url or "не указана"
+        await callback.message.edit_text(
+            f"🔗 <b>Изменение ссылки на пост</b>\n\n"
+            f"Блюдо: <b>{dish.name}</b>\n"
+            f"Текущая ссылка: <b>{current_link}</b>\n\n"
+            f"Введите новую ссылку на пост в Telegram канале\n"
+            f"(например: https://t.me/your_channel/123)\n"
+            f"или '-' чтобы удалить:",
+            parse_mode="HTML"
+        )
+        
+        await state.set_state(AdminStates.ENTERING_DISH_LINK)
         await state.update_data(dish_id=dish_id)
         await callback.answer()
 
@@ -1641,3 +2078,38 @@ async def cancel_order_by_master(callback: CallbackQuery):
             await callback.answer("❌ Заказ отменён!", show_alert=True)
         else:
             await callback.answer("❌ Ошибка отмены заказа", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("show_payment_photo_"))
+async def show_payment_photo(callback: CallbackQuery):
+    """Показать фото подтверждения оплаты"""
+    order_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.database import Order
+        order = await session.get(Order, order_id)
+        
+        if not order:
+            await callback.answer("❌ Заказ не найден", show_alert=True)
+            return
+        
+        if not order.payment_photo_file_id:
+            await callback.answer("❌ Фото оплаты не найдено", show_alert=True)
+            return
+        
+        try:
+            # Отправляем фото
+            await callback.bot.send_photo(
+                chat_id=callback.message.chat.id,
+                photo=order.payment_photo_file_id,
+                caption=f"💰 Фото подтверждения оплаты\n📋 Заказ #{order.id}\n💳 Сумма: {order.total_amount} руб",
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "🔙 Назад к заказу", "callback_data": f"admin_order_{order_id}"}]
+                    ]
+                }
+            )
+            await callback.answer()
+        except Exception as e:
+            print(f"Ошибка отправки фото: {e}")
+            await callback.answer("❌ Ошибка загрузки фото", show_alert=True)

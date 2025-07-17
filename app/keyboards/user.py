@@ -85,7 +85,7 @@ def get_dishes_keyboard(dishes, category_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_dish_detail_keyboard(dish_id: int, category_id: int) -> InlineKeyboardMarkup:
+def get_dish_detail_keyboard(dish_id: int, category_id: int, dish=None) -> InlineKeyboardMarkup:
     """Клавиатура для деталей блюда"""
     builder = InlineKeyboardBuilder()
     
@@ -104,6 +104,23 @@ def get_dish_detail_keyboard(dish_id: int, category_id: int) -> InlineKeyboardMa
     # Разбиваем на ряды по 3 кнопки
     for i in range(0, len(quantity_buttons), 3):
         builder.row(*quantity_buttons[i:i+3])
+    
+    # Добавляем кнопку для ввода произвольного количества
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ Ввести количество",
+            callback_data=f"input_quantity_{dish_id}_{category_id}"
+        )
+    )
+    
+    # Кнопка для ссылки на пост в канале (если есть)
+    if dish and dish.telegram_post_url:
+        builder.row(
+            InlineKeyboardButton(
+                text="📖 Подробнее в канале",
+                url=dish.telegram_post_url
+            )
+        )
     
     builder.row(
         InlineKeyboardButton(

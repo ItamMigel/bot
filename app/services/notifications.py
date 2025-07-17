@@ -105,7 +105,52 @@ class NotificationService:
             user_name=get_user_display_name(user)
         )
         
-        return await NotificationService.notify_admins(bot, message)
+        # Отправляем уведомление с фото если есть file_id
+        if order.payment_photo_file_id:
+            return await NotificationService.notify_admins_with_photo(
+                bot, message, order.payment_photo_file_id, order.id
+            )
+        else:
+            return await NotificationService.notify_admins(bot, message)
+    
+    @staticmethod
+    async def notify_admins_with_photo(bot: Bot, caption: str, photo_file_id: str, order_id: int):
+        """Отправить фото с подписью всем администраторам"""
+        if not settings.admin_ids:
+            logging.warning("No admin IDs configured for notifications")
+            return False
+            
+        sent_count = 0
+        failed_count = 0
+        
+        # Создаем кнопку для быстрого перехода к заказу
+        keyboard = {
+            "inline_keyboard": [
+                [{"text": "📋 Посмотреть заказ", "callback_data": f"view_order_{order_id}"}]
+            ]
+        }
+        
+        for admin_id in settings.admin_ids:
+            try:
+                await bot.send_photo(
+                    chat_id=admin_id,
+                    photo=photo_file_id,
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+                sent_count += 1
+                logging.info(f"Photo notification sent to admin {admin_id}")
+                
+            except TelegramBadRequest as e:
+                failed_count += 1
+                logging.error(f"Failed to send photo to admin {admin_id}: {e}")
+            except Exception as e:
+                failed_count += 1
+                logging.error(f"Unexpected error sending photo to admin {admin_id}: {e}")
+        
+        logging.info(f"Photo notification stats: {sent_count} sent, {failed_count} failed")
+        return sent_count > 0
     
     @staticmethod
     async def notify_feedback(bot: Bot, user, feedback_text: str):

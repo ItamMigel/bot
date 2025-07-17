@@ -11,6 +11,7 @@ from app.keyboards.user import (
     get_dish_detail_keyboard, get_main_menu_keyboard
 )
 from app.database import async_session_maker, Category, Dish, User
+from app.config import settings
 
 router = Router()
 
@@ -112,7 +113,7 @@ async def show_dish(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(
         message_text,
-        reply_markup=get_dish_detail_keyboard(dish.id, dish.category_id)
+        reply_markup=get_dish_detail_keyboard(dish.id, dish.category_id, dish)
     )
     await callback.answer()
 
@@ -150,3 +151,103 @@ async def add_to_cart(callback: CallbackQuery, user: User):
             await callback.answer(f"❌ {str(e)}", show_alert=True)
         except Exception as e:
             await callback.answer("❌ Ошибка добавления в корзину", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("input_quantity_"))
+async def request_quantity_input(callback: CallbackQuery, state: FSMContext):
+    """Запросить ввод количества для блюда"""
+    # Парсим данные: input_quantity_dish_id_category_id
+    parts = callback.data.split("_")
+    dish_id = int(parts[2])
+    category_id = int(parts[3])
+    
+    # Сохраняем данные в состоянии
+    await state.update_data(
+        dish_id=dish_id, 
+        category_id=category_id,
+        awaiting_quantity=True
+    )
+    await state.set_state(UserStates.ENTERING_QUANTITY)
+    
+    async with async_session_maker() as session:
+        dish = await session.get(Dish, dish_id)
+        if dish:
+            from app.utils.helpers import format_price
+            message = texts.INPUT_QUANTITY_MESSAGE.format(
+                dish_name=dish.name,
+                price=format_price(dish.price),
+                max_quantity=settings.max_dish_quantity
+            )
+            await callback.message.edit_text(message)
+        else:
+            await callback.answer("❌ Блюдо не найдено", show_alert=True)
+    
+    await callback.answer()
+
+
+@router.message(UserStates.ENTERING_QUANTITY)
+async def process_quantity_input(message: Message, state: FSMContext, user: User):
+    """Обработать введенное количество"""
+    data = await state.get_data()
+    dish_id = data.get("dish_id")
+    category_id = data.get("category_id")
+    
+    # Проверяем, что это число
+    try:
+        quantity = int(message.text)
+        if quantity < 1 or quantity > settings.max_dish_quantity:
+            await message.answer(
+                texts.INVALID_QUANTITY_MESSAGE.format(
+                    max_quantity=settings.max_dish_quantity
+                )
+            )
+            return
+    except ValueError:
+        await message.answer(
+            texts.INVALID_QUANTITY_MESSAGE.format(
+                max_quantity=settings.max_dish_quantity
+            )
+        )
+        return
+    
+    # Добавляем в корзину
+    async with async_session_maker() as session:
+        try:
+            from app.services.cart import CartService
+            
+            # Добавляем товар в корзину
+            item = await CartService.add_item_to_cart(
+                session, user.id, dish_id, quantity
+            )
+            await session.commit()
+            
+            # Получаем информацию о блюде для уведомления
+            dish = await session.get(Dish, dish_id)
+            if dish:
+                from app.utils.helpers import format_price
+                total_price = dish.price * quantity
+                await message.answer(
+                    f"✅ {dish.name} (x{quantity}) добавлено в корзину!\n"
+                    f"💰 Сумма: {format_price(total_price)}"
+                )
+                
+                # Возвращаемся к деталям блюда
+                await message.answer(
+                    texts.DISH_MESSAGE.format(
+                        dish_name=dish.name,
+                        description=dish.description,
+                        price=format_price(dish.price)
+                    ),
+                    reply_markup=get_dish_detail_keyboard(dish.id, category_id, dish)
+                )
+            else:
+                await message.answer("✅ Товар добавлен в корзину!")
+                
+        except ValueError as e:
+            await message.answer(f"❌ {str(e)}")
+        except Exception as e:
+            await message.answer("❌ Ошибка добавления в корзину")
+    
+    # Очищаем состояние
+    await state.clear()
+    await state.set_state(UserStates.BROWSING_MENU)

@@ -108,7 +108,7 @@ def get_order_status_emoji(status: str) -> str:
     status_emojis = {
         "cart": "🛒",
         "pending_payment": "⏳",
-        "payment_confirmation": "🔍", 
+        "payment_received": "🔍", 
         "confirmed": "✅",
         "ready": "🎉",
         "completed": "✅",

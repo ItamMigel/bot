@@ -118,13 +118,16 @@ class OrderService:
     async def update_payment_screenshot(
         session, 
         order_id: int, 
-        screenshot_path: str
+        screenshot_path: str,
+        photo_file_id: str = None
     ) -> bool:
         """Обновить скриншот оплаты заказа"""
         try:
             order = await OrderService.get_order_by_id(session, order_id)
             if order:
                 order.payment_screenshot = screenshot_path
+                if photo_file_id:
+                    order.payment_photo_file_id = photo_file_id
                 order.status = OrderStatus.PAYMENT_RECEIVED.value
                 order.updated_at = datetime.utcnow()
                 return True

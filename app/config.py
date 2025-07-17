@@ -43,12 +43,16 @@ class Settings:
         # Настройки уведомлений
         self.notification_chat_id: int = int(os.getenv("NOTIFICATION_CHAT_ID", "0"))
         
+        # Настройки каналов и ссылок
+        self.telegram_channel_url: str = os.getenv("TELEGRAM_CHANNEL_URL", "")
+        
         # Настройки файлов
         self.upload_path: str = os.getenv("UPLOAD_PATH", "./uploads")
         self.max_file_size: int = int(os.getenv("MAX_FILE_SIZE", "10485760"))  # 10MB
         
         # Настройки заказов
         self.min_order_amount: float = float(os.getenv("MIN_ORDER_AMOUNT", "500.0"))
+        self.max_dish_quantity: int = int(os.getenv("MAX_DISH_QUANTITY", "50"))
         
         delivery_days_str = os.getenv("DELIVERY_DAYS", "1,2,3,4,5")
         self.delivery_days: List[int] = []

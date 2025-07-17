@@ -29,13 +29,21 @@ async def show_faq(event: Message | CallbackQuery, state: FSMContext):
     ])
     
     if isinstance(event, Message):
+        from app.config import settings
+        faq_text = texts.FAQ_MAIN_MESSAGE.format(
+            channel_url=settings.telegram_channel_url or "скоро будет доступен"
+        )
         await event.answer(
-            texts.FAQ_MAIN_MESSAGE,
+            faq_text,
             reply_markup=keyboard
         )
     else:
+        from app.config import settings
+        faq_text = texts.FAQ_MAIN_MESSAGE.format(
+            channel_url=settings.telegram_channel_url or "скоро будет доступен"
+        )
         await event.message.edit_text(
-            texts.FAQ_MAIN_MESSAGE,
+            faq_text,
             reply_markup=keyboard
         )
         await event.answer()

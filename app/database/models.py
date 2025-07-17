@@ -79,6 +79,7 @@ class Dish(Base):
     description = Column(Text, nullable=True)
     price = Column(Float, nullable=False)
     image_url = Column(String(500), nullable=True)
+    telegram_post_url = Column(String(500), nullable=True)  # Ссылка на пост в канале
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     is_available = Column(Boolean, default=True)
     sort_order = Column(Integer, default=0)
@@ -103,6 +104,7 @@ class Order(Base):
     status = Column(String(50), default=OrderStatus.CART.value)
     payment_method = Column(String(20), nullable=True)  # 'card', 'cash'
     payment_screenshot = Column(String(500), nullable=True)
+    payment_photo_file_id = Column(String(500), nullable=True)  # file_id фото для повторного просмотра
     notes = Column(Text, nullable=True)
     delivery_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=func.now())
