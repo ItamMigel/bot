@@ -67,6 +67,24 @@ class OrderService:
         except Exception as e:
             print(f"Ошибка получения заказов: {e}")
             return []
+
+    @staticmethod
+    async def get_user_saved_orders(session, user_id: int) -> List[Order]:
+        """Получить заказы пользователя с пользовательскими названиями (сохраненные для повтора)"""
+        try:
+            result = await session.execute(
+                select(Order)
+                .where(and_(
+                    Order.user_id == user_id,
+                    Order.custom_name.isnot(None),
+                    Order.custom_name != ""
+                ))
+                .order_by(Order.updated_at.desc())
+            )
+            return result.scalars().all()
+        except Exception as e:
+            print(f"Ошибка получения сохраненных заказов: {e}")
+            return []
     
     @staticmethod
     async def get_order_by_id(session, order_id: int) -> Optional[Order]:
@@ -148,7 +166,7 @@ class OrderService:
             # Добавляем товары из заказа в корзину
             for order_item in order.items:
                 if order_item.dish.is_available:  # Проверяем доступность блюда
-                    await CartService.add_to_cart(
+                    await CartService.add_item_to_cart(
                         session, 
                         user_id, 
                         order_item.dish_id, 

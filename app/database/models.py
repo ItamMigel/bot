@@ -106,6 +106,7 @@ class Order(Base):
     payment_screenshot = Column(String(500), nullable=True)
     payment_photo_file_id = Column(String(500), nullable=True)  # file_id фото для повторного просмотра
     notes = Column(Text, nullable=True)
+    custom_name = Column(String(255), nullable=True)  # Пользовательское название заказа для повторения
     delivery_date = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())

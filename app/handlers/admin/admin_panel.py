@@ -11,6 +11,7 @@ from app.utils.texts import ADMIN_HELP, ORDER_STATUSES
 from app.utils.states import AdminStates
 from app.keyboards.user import get_main_menu_keyboard
 from app.services.order import OrderService
+from app.utils.helpers import format_datetime
 
 router = Router()
 router.message.middleware(AdminMiddleware())
@@ -23,11 +24,11 @@ async def admin_panel(message: Message):
     keyboard = [
         [
             {"text": "📋 Управление заказами", "callback_data": "admin_orders_menu"},
-            {"text": "🍽 Управление меню", "callback_data": "admin_menu"}
+            {"text": "📊 Все заказы", "callback_data": "admin_all_orders"}
         ],
         [
             {"text": "📈 Статистика", "callback_data": "admin_stats"},
-            {"text": "⚙️ Настройки", "callback_data": "admin_settings"}
+            {"text": "🍽 Управление меню", "callback_data": "admin_menu"}
         ],
         [
             {"text": "🔙 Главное меню", "callback_data": "main_menu"}
@@ -152,7 +153,7 @@ async def show_filtered_orders(callback: CallbackQuery):
                 text += (
                     f"🔹 <b>#{order.id}</b> | {status_text}\n"
                     f"👤 {user_name} | 💰 {format_price(order.total_amount)}\n"
-                    f"📅 {order.created_at.strftime('%d.%m %H:%M')}\n\n"
+                    f"📅 {format_datetime(order.created_at).split()[1]}\n\n"
                 )
         
         # Кнопки для пагинации и навигации
@@ -227,7 +228,7 @@ async def show_pending_orders(callback: CallbackQuery):
                 f"🔹 Заказ #{order.id}\n"
                 f"👤 {username}\n"
                 f"💰 {order.total_amount} ₽\n"
-                f"⏰ {order.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+                f"⏰ {format_datetime(order.created_at)}\n\n"
             )
             
             keyboard.append([
@@ -279,7 +280,7 @@ async def show_order_details(callback: CallbackQuery):
             f"📋 <b>Заказ #{order.id}</b>\n\n"
             f"👤 <b>Клиент:</b> {username}\n"
             f"💰 <b>Сумма:</b> {order.total_amount} ₽\n"
-            f"📅 <b>Дата:</b> {order.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+            f"📅 <b>Дата:</b> {format_datetime(order.created_at)}\n"
             f"📊 <b>Статус:</b> {ORDER_STATUSES.get(order.status, order.status)}\n"
         )
         
@@ -381,7 +382,7 @@ async def cancel_order(callback: CallbackQuery):
         await session.execute(
             update(Order)
             .where(Order.id == order_id)
-            .values(status=OrderStatus.CANCELLED.value)
+            .values(status=OrderStatus.CANCELLED_BY_MASTER.value)
         )
         await session.commit()
         
@@ -451,12 +452,13 @@ async def show_all_orders(callback: CallbackQuery):
                 OrderStatus.CONFIRMED.value: "✅",
                 OrderStatus.READY.value: "🍽",
                 OrderStatus.COMPLETED.value: "✅",
-                OrderStatus.CANCELLED.value: "❌"
+                OrderStatus.CANCELLED_BY_CLIENT.value: "❌",
+                OrderStatus.CANCELLED_BY_MASTER.value: "❌"
             }.get(order.status, "❓")
             
             text += (
                 f"{status_emoji} Заказ #{order.id} | {order.total_amount} ₽\n"
-                f"👤 {username} | {order.created_at.strftime('%d.%m %H:%M')}\n\n"
+                f"👤 {username} | {format_datetime(order.created_at).split()[1]}\n\n"
             )
             
             keyboard.append([
@@ -1142,7 +1144,7 @@ async def reject_payment(callback: CallbackQuery):
             # Уведомляем пользователя об отклонении
             from app.services.notifications import NotificationService
             await NotificationService.notify_order_status_change(
-                callback.bot, order, user, "payment_received", "cancelled"
+                callback.bot, order, user, "payment_received", "cancelled_by_master"
             )
             
             await callback.answer("❌ Оплата отклонена", show_alert=True)
@@ -1160,10 +1162,9 @@ async def change_order_status(callback: CallbackQuery):
     
     # Клавиатура со статусами
     keyboard = [
-        [{"text": "⏳ Подтвержден", "callback_data": f"set_status_{order_id}_confirmed"}],
-        [{"text": "🍽 Готовится", "callback_data": f"set_status_{order_id}_ready"}],
-        [{"text": "✅ Готов", "callback_data": f"set_status_{order_id}_completed"}],
-        [{"text": "❌ Отменить", "callback_data": f"set_status_{order_id}_cancelled"}],
+        [{"text": "🍽 Готов к выдаче", "callback_data": f"set_status_{order_id}_ready"}],
+        [{"text": "✅ Заказ выдан", "callback_data": f"set_status_{order_id}_completed"}],
+        [{"text": "❌ Отменить", "callback_data": f"set_status_{order_id}_cancelled_by_master"}],
         [{"text": "🔙 Назад", "callback_data": "admin_all_orders"}]
     ]
     
@@ -1220,7 +1221,7 @@ async def set_order_status(callback: CallbackQuery):
             "confirmed": "Подтвержден",
             "ready": "Готовится", 
             "completed": "Готов",
-            "cancelled": "Отменен"
+            "cancelled_by_master": "Отменен"
         }
         
         await callback.answer(
@@ -1280,7 +1281,7 @@ async def reject_cash_order(callback: CallbackQuery):
         result = await session.execute(
             update(Order)
             .where(Order.id == order_id)
-            .values(status="cancelled")
+            .values(status=OrderStatus.CANCELLED_BY_MASTER.value)
         )
         
         if result.rowcount > 0:
@@ -1297,7 +1298,7 @@ async def reject_cash_order(callback: CallbackQuery):
             # Уведомляем пользователя об отклонении
             from app.services.notifications import NotificationService
             await NotificationService.notify_order_status_change(
-                callback.bot, order, user, "pending_confirmation", "cancelled"
+                callback.bot, order, user, "pending_confirmation", "cancelled_by_master"
             )
             
             await callback.answer("❌ Заказ отклонен", show_alert=True)
@@ -1619,16 +1620,13 @@ async def add_dish_name(message: Message, state: FSMContext):
                 f"✅ Название блюда изменено!\n"
                 f"Было: <b>{old_name}</b>\n"
                 f"Стало: <b>{dish_name}</b>",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "🍽 К редактированию блюда", "callback_data": f"edit_dish_{dish_id}"}
+                ]]}
             )
             
-            # Возвращаемся к редактированию блюда
-            await state.clear()
-            from app.handlers.admin.admin_panel import edit_dish
-            # Имитируем callback для возврата к меню редактирования
-            callback_data = f"edit_dish_{dish_id}"
-            await message.answer("Возвращаемся к редактированию блюда...")
-            # TODO: Здесь нужно показать меню редактирования блюда
+            await state.clear()  # Очищаем состояние после успешного изменения
             
     else:
         # Создание нового блюда - продолжаем как раньше
@@ -1731,9 +1729,11 @@ async def handle_dish_description_input(message: Message, state: FSMContext):
         await state.clear()
     else:
         # Создание нового блюда
-        category_id = data.get("category_id")
-        dish_name = data.get("dish_name")
-        dish_price = data.get("dish_price")
+        await state.update_data(dish_description=new_description)
+        await state.set_state(AdminStates.ENTERING_DISH_LINK)
+        await message.answer(
+            "� Введите ссылку на пост в канале (или отправьте '-' чтобы пропустить):"
+        )
 
 
 @router.message(StateFilter(AdminStates.ENTERING_DISH_LINK))
@@ -1754,34 +1754,81 @@ async def handle_dish_link_input(message: Message, state: FSMContext):
     data = await state.get_data()
     dish_id = data.get("dish_id")
     
-    if not dish_id:
-        await message.answer("❌ Ошибка: блюдо не найдено")
+    if dish_id:
+        # Редактирование существующего блюда
+        async with async_session_maker() as session:
+            from app.database import Dish
+            
+            dish = await session.get(Dish, dish_id)
+            if not dish:
+                await message.answer("❌ Блюдо не найдено")
+                await state.clear()
+                return
+            
+            dish.telegram_post_url = new_link
+            await session.commit()
+            
+            link_text = new_link or "удалена"
+            await message.answer(
+                f"✅ Ссылка на пост для блюда '{dish.name}' изменена!\n"
+                f"🔗 Новая ссылка: {link_text}",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "🍽 К редактированию блюда", "callback_data": f"edit_dish_{dish_id}"}
+                ]]}
+            )
         await state.clear()
-        return
-    
-    # Обновляем ссылку
-    async with async_session_maker() as session:
-        from app.database import Dish
+    else:
+        # Создание нового блюда - завершаем процесс
+        category_id = data.get("category_id")
+        dish_name = data.get("dish_name")
+        dish_price = data.get("dish_price")
+        dish_description = data.get("dish_description")
         
-        dish = await session.get(Dish, dish_id)
-        if not dish:
-            await message.answer("❌ Блюдо не найдено")
+        if not category_id or not dish_name or dish_price is None:
+            await message.answer("❌ Ошибка: недостаточно данных для создания блюда")
             await state.clear()
             return
         
-        dish.telegram_post_url = new_link
-        await session.commit()
+        # Создаем блюдо
+        async with async_session_maker() as session:
+            from app.database import Dish, Category
+            
+            # Проверяем категорию
+            category = await session.get(Category, category_id)
+            if not category:
+                await message.answer("❌ Категория не найдена")
+                await state.clear()
+                return
+            
+            # Создаем новое блюдо
+            new_dish = Dish(
+                name=dish_name,
+                price=dish_price,
+                description=dish_description,
+                category_id=category_id,
+                telegram_post_url=new_link,
+                is_available=True
+            )
+            session.add(new_dish)
+            await session.commit()
+            await session.refresh(new_dish)
+            
+            link_text = f"🔗 <b>Ссылка:</b> {new_link}\n" if new_link else ""
+            await message.answer(
+                f"✅ <b>Блюдо создано!</b>\n\n"
+                f"📛 <b>Название:</b> {dish_name}\n"
+                f"💰 <b>Цена:</b> {dish_price} ₽\n"
+                f"� <b>Категория:</b> {category.name}\n"
+                f"📝 <b>Описание:</b> {dish_description or 'не указано'}\n"
+                f"{link_text}",
+                parse_mode="HTML",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "🍽 Редактировать блюдо", "callback_data": f"edit_dish_{new_dish.id}"},
+                    {"text": "📂 К категории", "callback_data": f"dishes_in_category_{category_id}"}
+                ]]}
+            )
         
-        link_text = new_link or "удалена"
-        await message.answer(
-            f"✅ Ссылка на пост для блюда '{dish.name}' изменена!\n"
-            f"🔗 Новая ссылка: {link_text}",
-            reply_markup={"inline_keyboard": [[
-                {"text": "🍽 К редактированию блюда", "callback_data": f"edit_dish_{dish_id}"}
-            ]]}
-        )
-    
-    await state.clear()
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("edit_dish_price_"))

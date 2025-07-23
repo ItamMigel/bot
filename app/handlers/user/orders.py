@@ -5,9 +5,18 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ContentType, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import StateFilter
+from sqlalchemy import select, update
+from sqlalchemy.orm import selectinload
+
+from app.database import async_session_maker, Order, OrderItem, Dish, User, OrderStatus, PaymentStatus
+from app.middlewares.admin import AdminMiddleware
+from app.middlewares.auth import AuthMiddleware
+from app.keyboards.user import (
+    get_order_details_keyboard, get_orders_filter_keyboard
+)
 
 from app.utils import texts, UserStates
-from app.utils.helpers import format_price
+from app.utils.helpers import format_price, format_datetime
 from app.keyboards.user import (
     get_main_menu_keyboard, get_payment_method_keyboard, 
     get_order_confirmation_keyboard, get_orders_keyboard,
@@ -277,6 +286,9 @@ async def show_order_details(callback: CallbackQuery, state: FSMContext, user: U
     """Показать детали заказа"""
     order_id = int(callback.data.split("_")[1])
     
+    # Очищаем состояние при переходе к деталям заказа
+    await state.clear()
+    
     async with async_session_maker() as session:
         from app.services.order import OrderService
         order = await OrderService.get_order_details(session, order_id)
@@ -305,17 +317,23 @@ async def show_order_details(callback: CallbackQuery, state: FSMContext, user: U
         else:
             payment_info = "💵 Оплата наличными при получении"
         
+        # Добавляем пользовательское название если есть
+        custom_name_line = ""
+        if order.custom_name:
+            custom_name_line = f"\n💾 Сохранено как: {order.custom_name}"
+        
         order_text = texts.ORDER_DETAILS_MESSAGE.format(
             order_id=order.id,
-            created_at=order.created_at.strftime("%d.%m.%Y %H:%M"),
+            custom_name_line=custom_name_line,
+            created_at=format_datetime(order.created_at),
             status=texts.ORDER_STATUSES.get(order.status, order.status),
             total_amount=format_price(order.total_amount),
             order_items="\n".join(order_items_text),
             payment_info=payment_info
         )
         
-        # Можно ли повторить заказ
-        can_repeat = order.status in ["completed", "ready"]
+        # Можно ли повторить заказ (только завершенные заказы)
+        can_repeat = order.status in [OrderStatus.COMPLETED.value]
         
         # Можно ли отменить заказ (только активные заказы)
         can_cancel = order.status in ["pending_payment", "payment_received"]
@@ -328,23 +346,99 @@ async def show_order_details(callback: CallbackQuery, state: FSMContext, user: U
 
 
 @router.callback_query(F.data.startswith("repeat_order_"))
-async def repeat_order(callback: CallbackQuery, state: FSMContext, user: User):
-    """Повторить заказ"""
+async def repeat_order_prompt_name(callback: CallbackQuery, state: FSMContext, user: User):
+    """Предложить задать название для повторяемого заказа"""
+    # Проверяем тип callback_data
+    if callback.data.startswith("repeat_order_skip_"):
+        # Это кнопка "пропустить"
+        order_id = int(callback.data.split("_")[3])
+        await _process_repeat_order(callback, state, user, order_id, custom_name=None)
+        return
+    
     order_id = int(callback.data.split("_")[2])
     
+    # Сохраняем order_id в состоянии
+    await state.update_data(repeat_order_id=order_id)
+    await state.set_state(UserStates.SETTING_CUSTOM_ORDER_NAME)
+    
+    await callback.message.edit_text(
+        "📝 <b>Повторение заказа</b>\n\n"
+        "Хотите задать название для этого заказа?\n"
+        "Это поможет легко найти его в будущем.\n\n"
+        "Отправьте название или нажмите 'Пропустить':",
+        reply_markup={
+            "inline_keyboard": [
+                [{"text": "⏭ Пропустить", "callback_data": f"repeat_order_skip_{order_id}"}],
+                [{"text": "🔙 Назад", "callback_data": f"order_{order_id}"}]
+            ]
+        },
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("repeat_order_skip_"))
+async def repeat_order_skip_name(callback: CallbackQuery, state: FSMContext, user: User):
+    """Повторить заказ без названия"""
+    order_id = int(callback.data.split("_")[3])
+    await _process_repeat_order(callback, state, user, order_id, custom_name=None)
+
+
+@router.message(StateFilter(UserStates.SETTING_CUSTOM_ORDER_NAME))
+async def process_custom_order_name(message: Message, state: FSMContext, user: User):
+    """Обработка пользовательского названия заказа"""
+    data = await state.get_data()
+    order_id = data.get("repeat_order_id")
+    
+    if not order_id:
+        await message.answer("❌ Ошибка: заказ не найден")
+        await state.clear()
+        return
+    
+    custom_name = message.text.strip()
+    if len(custom_name) > 100:
+        await message.answer("❌ Название слишком длинное. Максимум 100 символов.")
+        return
+    
+    await _process_repeat_order(message, state, user, order_id, custom_name)
+
+
+async def _process_repeat_order(callback_or_message, state: FSMContext, user: User, order_id: int, custom_name: str = None):
+    """Внутренняя функция для повторения заказа"""
     async with async_session_maker() as session:
         from app.services.order import OrderService
+        
+        # Сохраняем название заказа если указано
+        if custom_name:
+            from sqlalchemy import update
+            await session.execute(
+                update(Order)
+                .where(Order.id == order_id)
+                .values(custom_name=custom_name)
+            )
+            await session.commit()
+        
         success = await OrderService.repeat_order(session, user.id, order_id)
         await session.commit()
         
         if success:
-            await callback.answer("✅ Товары добавлены в корзину")
+            message_text = "✅ Товары добавлены в корзину"
+            if custom_name:
+                message_text += f"\n📝 Заказ сохранен как: '{custom_name}'"
+            
+            await callback_or_message.answer(message_text)
             
             # Переходим к корзине
             from app.handlers.user.cart import show_cart
-            await show_cart(callback, state, user)
+            await show_cart(callback_or_message, state, user)
         else:
-            await callback.answer("❌ Ошибка при повторении заказа", show_alert=True)
+            error_text = "❌ Ошибка при повторении заказа"
+            if hasattr(callback_or_message, 'answer') and hasattr(callback_or_message.answer, '__code__') and 'show_alert' in callback_or_message.answer.__code__.co_varnames:
+                await callback_or_message.answer(error_text, show_alert=True)
+            else:
+                await callback_or_message.answer(error_text)
+    
+    await state.clear()
 
 
 async def notify_admin_new_order(order, user_obj=None, bot=None):
@@ -486,6 +580,59 @@ async def show_completed_orders(callback: CallbackQuery, state: FSMContext, user
         await callback.answer()
 
 
+@router.callback_query(F.data == "orders_saved")
+async def show_saved_orders(callback: CallbackQuery, state: FSMContext, user: User):
+    """Показать сохраненные заказы"""
+    async with async_session_maker() as session:
+        from app.services.order import OrderService
+        saved_orders = await OrderService.get_user_saved_orders(session, user.id)
+        
+        from app.keyboards.user import get_saved_orders_keyboard
+        
+        await callback.message.edit_text(
+            "💾 Ваши сохраненные заказы:",
+            reply_markup=get_saved_orders_keyboard(saved_orders)
+        )
+        await callback.answer()
+
+
+@router.callback_query(F.data == "back_to_order_filters")
+async def back_to_order_filters(callback: CallbackQuery, state: FSMContext, user: User):
+    """Вернуться к фильтрам заказов"""
+    await callback.message.edit_text(
+        "📋 Ваши заказы\n\nВыберите категорию:",
+        reply_markup=get_orders_filter_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("repeat_saved_order_"))
+async def repeat_saved_order_directly(callback: CallbackQuery, state: FSMContext, user: User):
+    """Быстро повторить сохраненный заказ (без запроса названия)"""
+    order_id = int(callback.data.split("_")[3])
+    
+    async with async_session_maker() as session:
+        from app.services.order import OrderService
+        
+        # Проверяем, что заказ принадлежит пользователю и имеет custom_name
+        order = await OrderService.get_order_details(session, order_id)
+        if not order or order.user_id != user.id or not order.custom_name:
+            await callback.answer("❌ Заказ не найден", show_alert=True)
+            return
+        
+        success = await OrderService.repeat_order(session, user.id, order_id)
+        await session.commit()
+        
+        if success:
+            await callback.answer(f"✅ Заказ '{order.custom_name}' добавлен в корзину")
+            
+            # Переходим к корзине
+            from app.handlers.user.cart import show_cart
+            await show_cart(callback, state, user)
+        else:
+            await callback.answer("❌ Ошибка при повторении заказа", show_alert=True)
+
+
 @router.callback_query(F.data == "orders_all")
 async def show_all_orders(callback: CallbackQuery, state: FSMContext, user: User):
     """Показать все заказы"""
@@ -496,7 +643,12 @@ async def show_all_orders(callback: CallbackQuery, state: FSMContext, user: User
         if not orders:
             await callback.message.edit_text(
                 texts.NO_ORDERS,
-                reply_markup=get_main_menu_keyboard()
+                reply_markup={
+                    "inline_keyboard": [
+                        [{"text": "🔙 Назад", "callback_data": "back_to_orders"}],
+                        [{"text": "🏠 Главное меню", "callback_data": "main_menu"}]
+                    ]
+                }
             )
             await callback.answer()
             return
@@ -594,3 +746,9 @@ async def final_cancel_order(callback: CallbackQuery, state: FSMContext, user: U
             await callback.answer("❌ Ошибка при отмене заказа", show_alert=True)
     
     await state.set_state(UserStates.MAIN_MENU)
+
+
+@router.callback_query(F.data == "no_action")
+async def no_action_handler(callback: CallbackQuery):
+    """Обработчик для неактивных кнопок"""
+    await callback.answer("Это информационное сообщение", show_alert=False)

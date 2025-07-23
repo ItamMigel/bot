@@ -267,6 +267,10 @@ def get_orders_filter_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text="📋 Все заказы",
             callback_data="orders_all"
+        ),
+        InlineKeyboardButton(
+            text="💾 Сохраненные",
+            callback_data="orders_saved"
         )
     )
     
@@ -385,6 +389,52 @@ def get_confirm_action_keyboard(action: str, item_id: Optional[int] = None) -> I
     builder.row(
         InlineKeyboardButton(text="✅ Да", callback_data=confirm_callback),
         InlineKeyboardButton(text="❌ Нет", callback_data=cancel_callback)
+    )
+    
+    return builder.as_markup()
+
+
+def get_saved_orders_keyboard(saved_orders) -> InlineKeyboardMarkup:
+    """Клавиатура со списком сохраненных заказов"""
+    builder = InlineKeyboardBuilder()
+    
+    if saved_orders:
+        for order in saved_orders:
+            # Показываем пользовательское название или дату создания
+            display_name = order.custom_name
+            if not display_name:
+                from app.utils.helpers import format_datetime
+                display_name = f"Заказ от {format_datetime(order.created_at)}"
+            
+            order_text = f"💾 {display_name} - {order.total_amount:.0f}₽"
+            
+            builder.row(
+                InlineKeyboardButton(
+                    text=order_text,
+                    callback_data=f"repeat_saved_order_{order.id}"
+                )
+            )
+    else:
+        builder.row(
+            InlineKeyboardButton(
+                text="📝 У вас пока нет сохраненных заказов",
+                callback_data="no_action"
+            )
+        )
+    
+    # Кнопка назад к фильтрам заказов
+    builder.row(
+        InlineKeyboardButton(
+            text="🔙 К фильтрам заказов",
+            callback_data="back_to_order_filters"
+        )
+    )
+    
+    builder.row(
+        InlineKeyboardButton(
+            text=texts.BUTTON_MAIN_MENU,
+            callback_data="main_menu"
+        )
     )
     
     return builder.as_markup()

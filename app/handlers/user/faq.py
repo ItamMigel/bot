@@ -35,7 +35,8 @@ async def show_faq(event: Message | CallbackQuery, state: FSMContext):
         )
         await event.answer(
             faq_text,
-            reply_markup=keyboard
+            reply_markup=keyboard,
+            parse_mode="HTML"
         )
     else:
         from app.config import settings
@@ -44,7 +45,8 @@ async def show_faq(event: Message | CallbackQuery, state: FSMContext):
         )
         await event.message.edit_text(
             faq_text,
-            reply_markup=keyboard
+            reply_markup=keyboard,
+            parse_mode="HTML"
         )
         await event.answer()
 

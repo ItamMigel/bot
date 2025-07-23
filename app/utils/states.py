@@ -25,6 +25,7 @@ class UserStates(StatesGroup):
     # Заказы
     VIEWING_ORDERS = State()
     VIEWING_ORDER_DETAILS = State()
+    SETTING_CUSTOM_ORDER_NAME = State()  # Новое состояние для задания названия заказа
     
     # FAQ и обратная связь
     VIEWING_FAQ = State()

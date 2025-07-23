@@ -1,7 +1,7 @@
 """Вспомогательные функции"""
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from app.config import settings
 
@@ -11,14 +11,26 @@ def format_price(price: float) -> str:
     return f"{price:.0f} руб"
 
 
+def to_msk_time(dt: datetime) -> datetime:
+    """Преобразовать UTC время в московское"""
+    if dt.tzinfo is None:
+        # Если время без timezone, считаем его UTC
+        dt = dt.replace(tzinfo=timezone.utc)
+    # Преобразуем в московское время (UTC+3)
+    msk_tz = timezone(timedelta(hours=3))
+    return dt.astimezone(msk_tz)
+
+
 def format_datetime(dt: datetime) -> str:
-    """Форматирование даты и времени"""
-    return dt.strftime("%d.%m.%Y %H:%M")
+    """Форматирование даты и времени в московском времени"""
+    msk_dt = to_msk_time(dt)
+    return msk_dt.strftime("%d.%m.%Y %H:%M")
 
 
 def format_date(dt: datetime) -> str:
-    """Форматирование даты"""
-    return dt.strftime("%d.%m.%Y")
+    """Форматирование даты в московском времени"""
+    msk_dt = to_msk_time(dt)
+    return msk_dt.strftime("%d.%m.%Y")
 
 
 def get_user_display_name(user) -> str:
@@ -112,7 +124,8 @@ def get_order_status_emoji(status: str) -> str:
         "confirmed": "✅",
         "ready": "🎉",
         "completed": "✅",
-        "cancelled": "❌"
+        "cancelled_by_client": "❌",
+        "cancelled_by_master": "❌"
     }
     return status_emojis.get(status, "❓")
 

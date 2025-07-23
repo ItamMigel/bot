@@ -5,7 +5,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 
 from app.config import settings
-from app.utils.helpers import get_user_display_name
+from app.utils.helpers import get_user_display_name, format_price, format_datetime
 
 
 class NotificationService:
@@ -63,7 +63,6 @@ class NotificationService:
     async def notify_new_order(bot: Bot, order, user):
         """Уведомить о новом заказе"""
         from app.utils import texts
-        from app.utils.helpers import format_price
         
         logging.info(f"NotificationService.notify_new_order вызван для заказа #{order.id}")
         
@@ -85,7 +84,7 @@ class NotificationService:
             total_amount=format_price(order.total_amount),
             payment_method="💳 Карта" if order.payment_method == "card" else "💵 Наличные",
             order_items="\n".join(items_text),
-            created_at=order.created_at.strftime('%d.%m.%Y %H:%M')
+            created_at=format_datetime(order.created_at)
         )
         
         logging.info(f"Сформировано уведомление для админов о заказе #{order.id}")
@@ -97,7 +96,6 @@ class NotificationService:
     async def notify_payment_received(bot: Bot, order, user):
         """Уведомить о получении скриншота оплаты"""
         from app.utils import texts
-        from app.utils.helpers import format_price
         
         message = texts.PAYMENT_RECEIVED_NOTIFICATION.format(
             order_id=order.id,
@@ -126,7 +124,7 @@ class NotificationService:
         # Создаем кнопку для быстрого перехода к заказу
         keyboard = {
             "inline_keyboard": [
-                [{"text": "📋 Посмотреть заказ", "callback_data": f"view_order_{order_id}"}]
+                [{"text": "📋 Посмотреть заказ", "callback_data": f"admin_order_{order_id}"}]
             ]
         }
         
@@ -184,7 +182,6 @@ class NotificationService:
     async def notify_order_cancelled(bot: Bot, order, user):
         """Уведомить об отмене заказа"""
         from app.utils import texts
-        from app.utils.helpers import format_price
         
         # Уведомляем пользователя об отмене
         user_message = f"❌ Ваш заказ #{order.id} на сумму {format_price(order.total_amount)} был отменен."

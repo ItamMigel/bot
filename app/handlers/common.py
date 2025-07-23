@@ -35,7 +35,7 @@ async def cmd_start(message: Message, state: FSMContext, user: User):
 @router.message(F.text == texts.BUTTON_HELP)
 async def cmd_help(message: Message):
     """Обработчик команды /help"""
-    await message.answer(texts.HELP_MESSAGE)
+    await message.answer(texts.HELP_MESSAGE, parse_mode="HTML")
 
 
 @router.message(F.text == texts.BUTTON_MAIN_MENU)
