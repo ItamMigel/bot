@@ -18,4 +18,4 @@ COPY . .
 RUN mkdir -p uploads
 
 # Запуск приложения
-CMD ["python", "app/main.py"]
+CMD ["python", "-m", "app.main"]
