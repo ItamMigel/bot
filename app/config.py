@@ -12,7 +12,7 @@ class Settings:
     def __init__(self):
         # Основные настройки бота
         self.bot_token: str = os.getenv("BOT_TOKEN", "")
-        self.database_url: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bot.db")
+        self.database_url: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:////app/data/bot.db")
         
         # Приветственное сообщение
         self.welcome_message: str = os.getenv(
