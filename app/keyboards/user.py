@@ -39,7 +39,7 @@ def get_categories_keyboard(categories) -> InlineKeyboardMarkup:
     for category in categories:
         builder.row(
             InlineKeyboardButton(
-                text=f"📂 {category.name}",
+                text=f"{category.name}",
                 callback_data=f"category_{category.id}"
             )
         )
