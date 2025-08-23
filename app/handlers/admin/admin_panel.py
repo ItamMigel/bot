@@ -764,7 +764,7 @@ async def show_categories_list(callback: CallbackQuery):
         keyboard = []
         for category in categories:
             keyboard.append([{
-                "text": f"📂 {category.name} ({'✅' if category.is_active else '❌'})",
+                "text": f"{category.name} ({'✅' if category.is_active else '❌'})",
                 "callback_data": f"edit_category_{category.id}"
             }])
         
