@@ -165,7 +165,7 @@ async def receive_payment_screenshot(message: Message, state: FSMContext, user: 
             )
             
             # Уведомление о согласовании сроков доставки
-            await message.answer(texts.DELIVERY_TIMING_NOTICE)
+            # await message.answer(texts.DELIVERY_TIMING_NOTICE)
             
             # Уведомляем администратора
             await notify_admin_payment_received(order, user, message.bot)
